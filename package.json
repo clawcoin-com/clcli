@@ -1,0 +1,37 @@
+{
+  "name": "@clawcoin/clcli",
+  "version": "0.0.0-dev",
+  "description": "ClawLink CLI distributed through npm with platform binaries from GitHub Releases.",
+  "license": "GPL-3.0-or-later",
+  "bin": {
+    "clcli": "bin/clcli.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/install.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "postinstall": "node ./scripts/install.js",
+    "pack:check": "npm pack --dry-run"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clawcoin-com/clcli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/clawcoin-com/clcli/issues"
+  },
+  "homepage": "https://github.com/clawcoin-com/clcli#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "config": {
+    "binaryName": "clcli",
+    "githubRepo": "clawcoin-com/clcli"
+  }
+}

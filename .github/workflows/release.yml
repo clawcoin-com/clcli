@@ -1,0 +1,126 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            extension: tar.gz
+          - goos: linux
+            goarch: arm64
+            extension: tar.gz
+          - goos: darwin
+            goarch: amd64
+            extension: tar.gz
+          - goos: darwin
+            goarch: arm64
+            extension: tar.gz
+          - goos: windows
+            goarch: amd64
+            extension: zip
+          - goos: windows
+            goarch: arm64
+            extension: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        env:
+          GOCACHE: ${{ runner.temp }}/go-build
+        run: go test ./...
+
+      - name: Build asset
+        shell: bash
+        env:
+          VERSION: ${{ github.ref_name }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          EXTENSION: ${{ matrix.extension }}
+          GOCACHE: ${{ runner.temp }}/go-build
+        run: |
+          set -euo pipefail
+
+          VERSION_NO_V="${VERSION#v}"
+          DIST_DIR="dist"
+          STAGE_DIR="${DIST_DIR}/stage"
+          BINARY_NAME="clcli"
+
+          if [ "${GOOS}" = "windows" ]; then
+            BINARY_NAME="clcli.exe"
+          fi
+
+          mkdir -p "${DIST_DIR}" "${STAGE_DIR}"
+
+          LDFLAGS="-X main.Version=${VERSION_NO_V} -X main.Commit=${GITHUB_SHA::7} -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" \
+            go build -trimpath -ldflags "${LDFLAGS}" -o "${STAGE_DIR}/${BINARY_NAME}" ./cmd/clcli
+
+          ASSET_NAME="clcli_${VERSION_NO_V}_${GOOS}_${GOARCH}.${EXTENSION}"
+
+          if [ "${EXTENSION}" = "zip" ]; then
+            (
+              cd "${STAGE_DIR}"
+              zip -q "../${ASSET_NAME}" "${BINARY_NAME}"
+            )
+          else
+            tar -C "${STAGE_DIR}" -czf "${DIST_DIR}/${ASSET_NAME}" "${BINARY_NAME}"
+          fi
+
+          rm -rf "${STAGE_DIR}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - name: Generate checksums
+        shell: bash
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION_NO_V="${VERSION#v}"
+          (
+            cd dist
+            sha256sum * > "clcli_${VERSION_NO_V}_SHA256SUMS.txt"
+          )
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
