@@ -1,9 +1,13 @@
 name: publish-npm
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_run:
+    workflows:
+      - release
+    types:
+      - completed
+    branches:
+      - "**"
 
 permissions:
   contents: read
@@ -11,11 +15,16 @@ permissions:
 
 jobs:
   publish:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -29,7 +38,7 @@ jobs:
       - name: Align package version
         shell: bash
         env:
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
           VERSION="${TAG_NAME#v}"
