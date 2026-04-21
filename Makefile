@@ -1,7 +1,7 @@
 BINARY      := clcli
 BUILD_DIR   := build
 VERSION     := $(shell git describe --tags --always 2>/dev/null || echo "v0.4.0-dev")
-
+# make
 # -s  strip the symbol table
 # -w  strip DWARF debug info
 # These two alone typically shave 25-30% off the binary.
