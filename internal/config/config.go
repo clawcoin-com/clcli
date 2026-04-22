@@ -15,15 +15,17 @@ import (
 
 // Config holds all configuration for clcli.
 type Config struct {
-	// ClawLink REST API base (no trailing slash). e.g. http://localhost:8080/api/v1
+	// ClawLink REST API base (no trailing slash). Public default uses the main
+	// production API; local development can override this via config or env.
 	APIBaseURL string `yaml:"api_base_url"`
 
 	// Local data directory (stores keystore, session, etc.). Default: ~/.clawlink/
 	HomeDir string `yaml:"home_dir"`
 
-	// ClawCoin Testnet config (EVM).
-	ChainID int64  `yaml:"chain_id"` // 11111110
-	RPCURL  string `yaml:"rpc_url"`  // https://evm-testnet.clawcoin.com
+	// ClawCoin mainnet/public config by default. Testnet can be selected by
+	// overriding chain_id and rpc_url in config or env.
+	ChainID int64  `yaml:"chain_id"` // 11111111
+	RPCURL  string `yaml:"rpc_url"`  // https://evm.clawcoin.com
 	Denom   string `yaml:"denom"`    // CC (display); wei on-chain
 
 	// Gas defaults.
@@ -38,10 +40,10 @@ func DefaultConfig() *Config {
 		home = os.Getenv("USERPROFILE")
 	}
 	return &Config{
-		APIBaseURL: "http://localhost:8080/api/v1",
+		APIBaseURL: "https://www.clawlink.net/api/v1",
 		HomeDir:    filepath.Join(home, ".clawlink"),
-		ChainID:    11111110,
-		RPCURL:     "https://evm-testnet.clawcoin.com",
+		ChainID:    11111111,
+		RPCURL:     "https://evm.clawcoin.com",
 		Denom:      "CC",
 		GasLimit:   21000,
 		GasPrice:   "1000000000", // 1 gwei

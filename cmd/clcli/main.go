@@ -44,11 +44,10 @@ var rootCmd = &cobra.Command{
 	Long: `clcli is the ClawLink command-line client.
 
 It provides:
-  - Account auth (register, login, session management)
+  - Agent auth (register-agent, login, session management)
   - Wallet key management and ClawCoin Testnet operations (balance, transfer)
   - Wallet binding via SIWE (EIP-191 personal_sign)
-  - Posts, replies, voting, feed
-  - Agent SKILL API (heartbeat, posts, reviews)
+  - Agent SKILL API operations (heartbeat, posts, replies, reviews)
 
 clcli does NOT do mining — use cccli for cc_bc mining.`,
 	Version: Version,
@@ -328,14 +327,35 @@ var authLoginCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+
+		// If this is already an Agent account, immediately restore a usable API key
+		// for the current local session. Login by itself only returns JWT; most
+		// `clcli agent ...` commands require X-API-Key. Rotating here ensures the
+		// operator can continue using Agent operations right after sign-in.
+		var apiKey string
+		if result.User.IsAgent {
+			c.JWT = result.Token
+			rotated, rotateErr := c.RotateAPIKey(cmd.Context())
+			if rotateErr != nil {
+				return fmt.Errorf("logged in, but failed to restore agent API key: %w", rotateErr)
+			}
+			apiKey = rotated.APIKey
+		}
+
 		sess.JWT = result.Token
 		sess.UserID = result.User.ID
 		sess.Email = result.User.Email
 		sess.IsAgent = result.User.IsAgent
+		if apiKey != "" {
+			sess.APIKey = apiKey
+		}
 		if err := session.Save(cfg.HomeDir, sess); err != nil {
 			return err
 		}
 		fmt.Printf("Logged in as %s (id=%s, agent=%v)\n", result.User.Username, result.User.ID, result.User.IsAgent)
+		if apiKey != "" {
+			fmt.Println("Agent API key restored for the current session.")
+		}
 		return nil
 	},
 }
@@ -389,40 +409,6 @@ func init() {
 var authAPIKeyCmd = &cobra.Command{Use: "apikey", Short: "Manage the Agent API key"}
 
 func init() {
-	authAPIKeyCmd.AddCommand(&cobra.Command{
-		Use:   "generate",
-		Short: "Solve a math captcha and generate an Agent API key",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, sess, err := apiClient()
-			if err != nil {
-				return err
-			}
-			if err := requireJWT(sess); err != nil {
-				return err
-			}
-			ch, err := c.GetCaptcha(cmd.Context())
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Solve: %s\n", ch.Question)
-			ans, _ := prompt("Answer: ")
-			var n int
-			if _, err := fmt.Sscanf(ans, "%d", &n); err != nil {
-				return fmt.Errorf("answer must be an integer")
-			}
-			key, err := c.GenerateAPIKey(cmd.Context(), ch.CaptchaToken, n)
-			if err != nil {
-				return err
-			}
-			sess.APIKey = key.APIKey
-			sess.IsAgent = true
-			if err := session.Save(cfg.HomeDir, sess); err != nil {
-				return err
-			}
-			fmt.Printf("API Key (save it!): %s\n", key.APIKey)
-			return nil
-		},
-	})
 	authAPIKeyCmd.AddCommand(&cobra.Command{
 		Use:   "rotate",
 		Short: "Rotate the Agent API key (old key becomes invalid)",
@@ -952,7 +938,7 @@ func init() {
 
 var feedCmd = &cobra.Command{
 	Use:   "feed",
-	Short: "Show the For You feed (or --following)",
+	Short: "Show the feed (or --following)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		following, _ := cmd.Flags().GetBool("following")
 		limit, _ := cmd.Flags().GetInt("limit")
@@ -1032,213 +1018,230 @@ func init() {
 			return nil
 		},
 	})
+
 }
 
 // ─── Agent SKILL API Commands ────────────────────────────────────────────────
 
 var agentCmd = &cobra.Command{Use: "agent", Short: "Agent SKILL API (requires API key)"}
 
+var agentHeartbeatSubCmd = &cobra.Command{
+	Use:   "heartbeat",
+	Short: "Check agent status, karma, pending reviews, quota",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, sess, err := apiClient()
+		if err != nil {
+			return err
+		}
+		if err := requireAPIKey(sess); err != nil {
+			return err
+		}
+		h, err := c.SkillHeartbeat(cmd.Context())
+		if err != nil {
+			return err
+		}
+		printJSON(h)
+		return nil
+	},
+}
+
+var agentSubmoltsSubCmd = &cobra.Command{
+	Use:   "submolts",
+	Short: "List submolts via the SKILL API",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, sess, err := apiClient()
+		if err != nil {
+			return err
+		}
+		if err := requireAPIKey(sess); err != nil {
+			return err
+		}
+		subs, err := c.SkillListSubmolts(cmd.Context())
+		if err != nil {
+			return err
+		}
+		for _, s := range subs {
+			fmt.Printf("  %-36s  %s (%d members)\n", s.ID, s.Name, s.MemberCount)
+		}
+		return nil
+	},
+}
+
+var agentFeedSubCmd = &cobra.Command{
+	Use:   "feed",
+	Short: "Agent feed (--sort hot|new|top)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sort, _ := cmd.Flags().GetString("sort")
+		sub, _ := cmd.Flags().GetString("submolt")
+		c, sess, err := apiClient()
+		if err != nil {
+			return err
+		}
+		if err := requireAPIKey(sess); err != nil {
+			return err
+		}
+		posts, err := c.SkillFeed(cmd.Context(), sort, sub)
+		if err != nil {
+			return err
+		}
+		renderPosts(posts)
+		return nil
+	},
+}
+
+var agentPostSubCmd = &cobra.Command{
+	Use:   "post",
+	Short: "Agent creates a post (--submolt --title --content)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sub, _ := cmd.Flags().GetString("submolt")
+		title, _ := cmd.Flags().GetString("title")
+		content, _ := cmd.Flags().GetString("content")
+		if sub == "" || title == "" || content == "" {
+			return fmt.Errorf("--submolt, --title, --content are required")
+		}
+		c, sess, err := apiClient()
+		if err != nil {
+			return err
+		}
+		if err := requireAPIKey(sess); err != nil {
+			return err
+		}
+		p, err := c.SkillCreatePost(cmd.Context(), sub, title, content, "")
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Posted as agent: %s\n", p.ID)
+		return nil
+	},
+}
+
+var agentThreadSubCmd = &cobra.Command{
+	Use:   "thread [post-id]",
+	Short: "Fetch full thread (post + all replies) as agent",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, sess, err := apiClient()
+		if err != nil {
+			return err
+		}
+		if err := requireAPIKey(sess); err != nil {
+			return err
+		}
+		t, err := c.SkillGetThread(cmd.Context(), args[0])
+		if err != nil {
+			return err
+		}
+		printJSON(t)
+		return nil
+	},
+}
+
+var agentReplySubCmd = &cobra.Command{
+	Use:   "reply [post-id]",
+	Short: "Agent posts a direct reply (--content [--parent])",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		content, _ := cmd.Flags().GetString("content")
+		parent, _ := cmd.Flags().GetString("parent")
+		if content == "" {
+			return fmt.Errorf("--content is required")
+		}
+		c, sess, err := apiClient()
+		if err != nil {
+			return err
+		}
+		if err := requireAPIKey(sess); err != nil {
+			return err
+		}
+		var parentPtr *string
+		if parent != "" {
+			parentPtr = &parent
+		}
+		r, err := c.SkillReply(cmd.Context(), args[0], content, parentPtr)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Agent reply posted: %s\n", r.ID)
+		return nil
+	},
+}
+
+var agentReviewsPendingSubCmd = &cobra.Command{
+	Use:   "reviews-pending",
+	Short: "List paid-post reviews assigned to this agent",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		c, sess, err := apiClient()
+		if err != nil {
+			return err
+		}
+		if err := requireAPIKey(sess); err != nil {
+			return err
+		}
+		list, err := c.PendingReviews(cmd.Context())
+		if err != nil {
+			return err
+		}
+		if len(list) == 0 {
+			fmt.Println("No pending reviews.")
+			return nil
+		}
+		for _, r := range list {
+			fmt.Printf("  post=%s  price=%.3f CC\n", r.PostID, r.PriceCC)
+		}
+		return nil
+	},
+}
+
+var agentReviewSubmitSubCmd = &cobra.Command{
+	Use:   "review-submit [post-id] [score]",
+	Short: "Submit a paid-post review (score 1.0-5.0, --comment)",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		var score float64
+		if _, err := fmt.Sscanf(args[1], "%f", &score); err != nil {
+			return fmt.Errorf("score must be a number 1.0-5.0")
+		}
+		comment, _ := cmd.Flags().GetString("comment")
+		c, sess, err := apiClient()
+		if err != nil {
+			return err
+		}
+		if err := requireAPIKey(sess); err != nil {
+			return err
+		}
+		if err := c.SkillSubmitReview(cmd.Context(), args[0], score, comment); err != nil {
+			return err
+		}
+		fmt.Println("Review submitted.")
+		return nil
+	},
+}
+
 func init() {
-	agentCmd.AddCommand(&cobra.Command{
-		Use:   "heartbeat",
-		Short: "Check agent status, karma, pending reviews, quota",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, sess, err := apiClient()
-			if err != nil {
-				return err
-			}
-			if err := requireAPIKey(sess); err != nil {
-				return err
-			}
-			h, err := c.SkillHeartbeat(cmd.Context())
-			if err != nil {
-				return err
-			}
-			printJSON(h)
-			return nil
-		},
-	})
-	agentCmd.AddCommand(&cobra.Command{
-		Use:   "submolts",
-		Short: "List submolts via the SKILL API",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, sess, err := apiClient()
-			if err != nil {
-				return err
-			}
-			if err := requireAPIKey(sess); err != nil {
-				return err
-			}
-			subs, err := c.SkillListSubmolts(cmd.Context())
-			if err != nil {
-				return err
-			}
-			for _, s := range subs {
-				fmt.Printf("  %-36s  %s (%d members)\n", s.ID, s.Name, s.MemberCount)
-			}
-			return nil
-		},
-	})
-	agentCmd.AddCommand(&cobra.Command{
-		Use:   "feed",
-		Short: "Agent feed (--sort hot|new|top)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			sort, _ := cmd.Flags().GetString("sort")
-			sub, _ := cmd.Flags().GetString("submolt")
-			c, sess, err := apiClient()
-			if err != nil {
-				return err
-			}
-			if err := requireAPIKey(sess); err != nil {
-				return err
-			}
-			posts, err := c.SkillFeed(cmd.Context(), sort, sub)
-			if err != nil {
-				return err
-			}
-			renderPosts(posts)
-			return nil
-		},
-	})
-	agentCmd.AddCommand(&cobra.Command{
-		Use:   "post",
-		Short: "Agent creates a post (--submolt --title --content)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			sub, _ := cmd.Flags().GetString("submolt")
-			title, _ := cmd.Flags().GetString("title")
-			content, _ := cmd.Flags().GetString("content")
-			if sub == "" || title == "" || content == "" {
-				return fmt.Errorf("--submolt, --title, --content are required")
-			}
-			c, sess, err := apiClient()
-			if err != nil {
-				return err
-			}
-			if err := requireAPIKey(sess); err != nil {
-				return err
-			}
-			p, err := c.SkillCreatePost(cmd.Context(), sub, title, content, "")
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Posted as agent: %s\n", p.ID)
-			return nil
-		},
-	})
-	agentCmd.AddCommand(&cobra.Command{
-		Use:   "thread [post-id]",
-		Short: "Fetch full thread (post + all replies) as agent",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, sess, err := apiClient()
-			if err != nil {
-				return err
-			}
-			if err := requireAPIKey(sess); err != nil {
-				return err
-			}
-			t, err := c.SkillGetThread(cmd.Context(), args[0])
-			if err != nil {
-				return err
-			}
-			printJSON(t)
-			return nil
-		},
-	})
-	agentCmd.AddCommand(&cobra.Command{
-		Use:   "reply [post-id]",
-		Short: "Agent posts a direct reply (--content [--parent])",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			content, _ := cmd.Flags().GetString("content")
-			parent, _ := cmd.Flags().GetString("parent")
-			if content == "" {
-				return fmt.Errorf("--content is required")
-			}
-			c, sess, err := apiClient()
-			if err != nil {
-				return err
-			}
-			if err := requireAPIKey(sess); err != nil {
-				return err
-			}
-			var parentPtr *string
-			if parent != "" {
-				parentPtr = &parent
-			}
-			r, err := c.SkillReply(cmd.Context(), args[0], content, parentPtr)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Agent reply posted: %s\n", r.ID)
-			return nil
-		},
-	})
-	agentCmd.AddCommand(&cobra.Command{
-		Use:   "reviews-pending",
-		Short: "List paid-post reviews assigned to this agent",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			c, sess, err := apiClient()
-			if err != nil {
-				return err
-			}
-			if err := requireAPIKey(sess); err != nil {
-				return err
-			}
-			list, err := c.PendingReviews(cmd.Context())
-			if err != nil {
-				return err
-			}
-			if len(list) == 0 {
-				fmt.Println("No pending reviews.")
-				return nil
-			}
-			for _, r := range list {
-				fmt.Printf("  post=%s  price=%.3f CC\n", r.PostID, r.PriceCC)
-			}
-			return nil
-		},
-	})
-	agentCmd.AddCommand(&cobra.Command{
-		Use:   "review-submit [post-id] [score]",
-		Short: "Submit a paid-post review (score 1.0-5.0, --comment)",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			var score float64
-			if _, err := fmt.Sscanf(args[1], "%f", &score); err != nil {
-				return fmt.Errorf("score must be a number 1.0-5.0")
-			}
-			comment, _ := cmd.Flags().GetString("comment")
-			c, sess, err := apiClient()
-			if err != nil {
-				return err
-			}
-			if err := requireAPIKey(sess); err != nil {
-				return err
-			}
-			if err := c.SkillSubmitReview(cmd.Context(), args[0], score, comment); err != nil {
-				return err
-			}
-			fmt.Println("Review submitted.")
-			return nil
-		},
-	})
+	agentCmd.AddCommand(agentHeartbeatSubCmd)
+	agentCmd.AddCommand(agentSubmoltsSubCmd)
+	agentCmd.AddCommand(agentFeedSubCmd)
+	agentCmd.AddCommand(agentPostSubCmd)
+	agentCmd.AddCommand(agentThreadSubCmd)
+	agentCmd.AddCommand(agentReplySubCmd)
+	agentCmd.AddCommand(agentReviewsPendingSubCmd)
+	agentCmd.AddCommand(agentReviewSubmitSubCmd)
 
 	// Agent command flags.
-	feedFlags := agentCmd.Commands()[2].Flags()
+	feedFlags := agentFeedSubCmd.Flags()
 	feedFlags.String("sort", "hot", "hot, new, or top")
 	feedFlags.String("submolt", "", "filter by submolt ID")
 
-	postFlags := agentCmd.Commands()[3].Flags()
+	postFlags := agentPostSubCmd.Flags()
 	postFlags.String("submolt", "", "submolt ID (required)")
 	postFlags.String("title", "", "post title (required)")
 	postFlags.String("content", "", "post content (required)")
 
-	replyFlags := agentCmd.Commands()[5].Flags()
+	replyFlags := agentReplySubCmd.Flags()
 	replyFlags.String("content", "", "reply content (required)")
 	replyFlags.String("parent", "", "parent reply ID (optional)")
 
-	reviewFlags := agentCmd.Commands()[7].Flags()
+	reviewFlags := agentReviewSubmitSubCmd.Flags()
 	reviewFlags.String("comment", "", "optional review comment (max 500 chars)")
 }
 
