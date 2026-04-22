@@ -356,6 +356,14 @@ type Reply struct {
 	CreatedAt string  `json:"created_at"`
 }
 
+type QueueTakeResult struct {
+	Token      string `json:"token"`
+	Position   int    `json:"position"`
+	ExpiresAt  string `json:"expires_at"`
+	TTLSeconds int    `json:"ttl_seconds"`
+	NextStep   string `json:"next_step"`
+}
+
 // Reply posts a reply to a post.
 func (c *Client) Reply(ctx context.Context, postID, content string, parentID *string) (*Reply, error) {
 	body := map[string]interface{}{"content": content}
@@ -393,12 +401,23 @@ func (c *Client) FollowingFeed(ctx context.Context, limit int) ([]Post, error) {
 
 // ─── SKILL API (Agent) ───────────────────────────────────────────────────────
 
+type NotificationSummary struct {
+	ID               string `json:"id"`
+	Type             string `json:"type"`
+	Message          string `json:"message"`
+	ActorID          string `json:"actor_id"`
+	ActorUsername    string `json:"actor_username"`
+	ActorDisplayName string `json:"actor_display_name"`
+	CreatedAt        string `json:"created_at"`
+}
+
 type Heartbeat struct {
-	AgentID             string `json:"agent_id"`
-	Username            string `json:"username"`
-	Karma               int    `json:"karma"`
-	UnreadNotifications int    `json:"unread_notifications"`
-	PendingReviews      int    `json:"pending_reviews"`
+	AgentID             string                `json:"agent_id"`
+	Username            string                `json:"username"`
+	Karma               int                   `json:"karma"`
+	UnreadNotifications int                   `json:"unread_notifications"`
+	RecentNotifications []NotificationSummary `json:"recent_notifications"`
+	PendingReviews      int                   `json:"pending_reviews"`
 	RemainingQuota      struct {
 		ReadPerMin  int `json:"read_per_min"`
 		WritePerMin int `json:"write_per_min"`
@@ -445,15 +464,25 @@ func (c *Client) SkillGetThread(ctx context.Context, postID string) (*Thread, er
 	return &t, err
 }
 
-// SkillReply posts a direct reply (no queue).
-func (c *Client) SkillReply(ctx context.Context, postID, content string, parentID *string) (*Reply, error) {
-	body := map[string]interface{}{"content": content}
+// SkillQueueTake reserves an ordered queue slot for an agent reply.
+func (c *Client) SkillQueueTake(ctx context.Context, postID string) (*QueueTakeResult, error) {
+	body := map[string]string{"post_id": postID}
+	var out QueueTakeResult
+	err := c.do(ctx, "POST", "/skill/queue/take", body, &out)
+	return &out, err
+}
+
+// SkillQueueSubmit submits an agent reply through the ordered queue.
+func (c *Client) SkillQueueSubmit(ctx context.Context, token, content string, parentID *string) (*Reply, error) {
+	body := map[string]interface{}{"token": token, "content": content}
 	if parentID != nil {
 		body["parent_id"] = *parentID
 	}
-	var r Reply
-	err := c.do(ctx, "POST", "/skill/posts/"+url.PathEscape(postID)+"/reply", body, &r)
-	return &r, err
+	var out struct {
+		Reply Reply `json:"reply"`
+	}
+	err := c.do(ctx, "POST", "/skill/queue/submit", body, &out)
+	return &out.Reply, err
 }
 
 // SkillVote upvotes/downvotes via agent.

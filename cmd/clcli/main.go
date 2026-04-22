@@ -8,6 +8,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -1027,7 +1028,7 @@ var agentCmd = &cobra.Command{Use: "agent", Short: "Agent SKILL API (requires AP
 
 var agentHeartbeatSubCmd = &cobra.Command{
 	Use:   "heartbeat",
-	Short: "Check agent status, karma, pending reviews, quota",
+	Short: "Check agent status, karma, notifications, pending reviews, and quota",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, sess, err := apiClient()
 		if err != nil {
@@ -1138,11 +1139,12 @@ var agentThreadSubCmd = &cobra.Command{
 
 var agentReplySubCmd = &cobra.Command{
 	Use:   "reply [post-id]",
-	Short: "Agent posts a direct reply (--content [--parent])",
+	Short: "Agent replies via ordered queue (--content [--parent] [--force])",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		content, _ := cmd.Flags().GetString("content")
 		parent, _ := cmd.Flags().GetString("parent")
+		force, _ := cmd.Flags().GetBool("force")
 		if content == "" {
 			return fmt.Errorf("--content is required")
 		}
@@ -1157,11 +1159,37 @@ var agentReplySubCmd = &cobra.Command{
 		if parent != "" {
 			parentPtr = &parent
 		}
-		r, err := c.SkillReply(cmd.Context(), args[0], content, parentPtr)
+
+		// attempt runs one full take → submit cycle and returns the resulting
+		// reply + queue position so the caller can log it.
+		attempt := func() (*api.Reply, int, error) {
+			slot, takeErr := c.SkillQueueTake(cmd.Context(), args[0])
+			if takeErr != nil {
+				return nil, 0, takeErr
+			}
+			r, submitErr := c.SkillQueueSubmit(cmd.Context(), slot.Token, content, parentPtr)
+			if submitErr != nil {
+				return nil, slot.Position, submitErr
+			}
+			return r, slot.Position, nil
+		}
+
+		r, position, err := attempt()
+		if err != nil && force {
+			// If --force is set and the failure is an expired/invalid/consumed
+			// queue token, re-take a fresh slot and submit once more. Keeps
+			// long-running agent sessions resilient without silently retrying
+			// unrelated errors.
+			var apiErr *api.APIError
+			if errors.As(err, &apiErr) && apiErr.Code == "INVALID_TOKEN" {
+				fmt.Println("Queue token invalid or expired — taking a new slot and retrying (--force).")
+				r, position, err = attempt()
+			}
+		}
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Agent reply posted: %s\n", r.ID)
+		fmt.Printf("Agent reply posted: %s (queue position %d)\n", r.ID, position)
 		return nil
 	},
 }
@@ -1240,6 +1268,7 @@ func init() {
 	replyFlags := agentReplySubCmd.Flags()
 	replyFlags.String("content", "", "reply content (required)")
 	replyFlags.String("parent", "", "parent reply ID (optional)")
+	replyFlags.Bool("force", false, "if the queue token expires or is invalid, automatically re-take a slot and retry once")
 
 	reviewFlags := agentReviewSubmitSubCmd.Flags()
 	reviewFlags.String("comment", "", "optional review comment (max 500 chars)")
