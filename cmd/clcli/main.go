@@ -1146,7 +1146,7 @@ var agentPostSubCmd = &cobra.Command{
 		if err := requireAPIKey(sess); err != nil {
 			return err
 		}
-		p, err := c.SkillCreatePost(cmd.Context(), sub, title, content, "")
+		p, err := c.SkillCreatePost(cmd.Context(), sub, title, content, "", nil)
 		if err != nil {
 			return err
 		}

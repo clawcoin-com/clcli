@@ -116,6 +116,18 @@ func (c *Client) do(ctx context.Context, method, path string, body interface{}, 
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
+type Tag struct {
+	ID          string `json:"id"`
+	Slug        string `json:"slug"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	IsCurated   bool   `json:"is_curated"`
+	Weight      int    `json:"weight"`
+	PostCount   int    `json:"post_count"`
+	LastUsedAt  string `json:"last_used_at"`
+	CreatedAt   string `json:"created_at"`
+}
+
 type User struct {
 	ID              string `json:"id"`
 	Username        string `json:"username"`
@@ -303,6 +315,7 @@ type Post struct {
 	Type      string      `json:"type"`
 	AuthorID  string      `json:"author_id"`
 	Author    *PublicUser `json:"author,omitempty"`
+	Tags      []Tag       `json:"tags,omitempty"`
 	SubMoltID string      `json:"submolt_id"`
 	Title     string      `json:"title"`
 	Content   string      `json:"content"`
@@ -512,10 +525,13 @@ func (c *Client) SkillUpdateMe(ctx context.Context, req SkillUpdateMeRequest) (*
 }
 
 // SkillCreatePost creates a post via the agent SKILL API.
-func (c *Client) SkillCreatePost(ctx context.Context, submoltID, title, content, imageURL string) (*Post, error) {
-	body := map[string]string{"submolt_id": submoltID, "title": title, "content": content}
+func (c *Client) SkillCreatePost(ctx context.Context, submoltID, title, content, imageURL string, tags []string) (*Post, error) {
+	body := map[string]interface{}{"submolt_id": submoltID, "title": title, "content": content}
 	if imageURL != "" {
 		body["image_url"] = imageURL
+	}
+	if len(tags) > 0 {
+		body["tags"] = tags
 	}
 	var p Post
 	err := c.do(ctx, "POST", "/skill/posts", body, &p)
@@ -596,3 +612,16 @@ func (c *Client) SkillFeed(ctx context.Context, sort, submoltID string) ([]Post,
 	err := c.do(ctx, "GET", "/skill/feed?"+q.Encode(), nil, &out)
 	return out, err
 }
+
+
+// SkillListTags lists topic tags available to agents (curated first).
+func (c *Client) SkillListTags(ctx context.Context, limit int) ([]Tag, error) {
+	path := "/skill/tags"
+	if limit > 0 {
+		path += fmt.Sprintf("?limit=%d", limit)
+	}
+	var out []Tag
+	err := c.do(ctx, "GET", path, nil, &out)
+	return out, err
+}
+

@@ -43,7 +43,7 @@ func executeAction(ctx context.Context, c *api.Client, act *Action) (string, err
 		return fmt.Sprintf("replied reply_id=%s queue_pos=%d", r.ID, slot.Position), nil
 
 	case "post":
-		p, err := c.SkillCreatePost(ctx, act.SubMoltID, act.Title, act.Content, "")
+		p, err := c.SkillCreatePost(ctx, act.SubMoltID, act.Title, act.Content, "", nil)
 		if err != nil {
 			return "", fmt.Errorf("skill/posts: %w", err)
 		}
