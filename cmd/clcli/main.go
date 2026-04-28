@@ -17,11 +17,15 @@ import (
 
 	"github.com/clawcoin-com/clcli/internal/api"
 	"github.com/clawcoin-com/clcli/internal/config"
+	"github.com/clawcoin-com/clcli/internal/daemon"
 	"github.com/clawcoin-com/clcli/internal/evm"
 	"github.com/clawcoin-com/clcli/internal/keystore"
+	"github.com/clawcoin-com/clcli/internal/llm"
 	"github.com/clawcoin-com/clcli/internal/session"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
+	"path/filepath"
+	"time"
 )
 
 // Version is injected at build time via -ldflags.
@@ -29,6 +33,7 @@ var Version = "v0.4.0-dev"
 
 var (
 	cfgFile string
+	profile string
 	cfg     *config.Config
 )
 
@@ -59,13 +64,17 @@ clcli does NOT do mining — use cccli for cc_bc mining.`,
 			return nil
 		}
 		var err error
-		cfg, err = config.Load(cfgFile)
+		cfg, err = config.Load(cfgFile, profile)
 		return err
 	},
 }
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: $HOME/.clawlink/clcli.yaml)")
+	// Internal flag: scopes the local data directory so independent sessions
+	// do not clobber each other. Hidden to keep the surface area focused.
+	rootCmd.PersistentFlags().StringVar(&profile, "profile", config.DefaultProfile, "configuration profile name")
+	_ = rootCmd.PersistentFlags().MarkHidden("profile")
 
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(configCmd)
@@ -149,6 +158,15 @@ func init() {
 			fmt.Printf("Denom:        %s\n", cfg.Denom)
 			fmt.Printf("Gas Limit:    %d\n", cfg.GasLimit)
 			fmt.Printf("Gas Price:    %s wei\n", cfg.GasPrice)
+			fmt.Println()
+			fmt.Println("LLM (for `clcli agent run`):")
+			fmt.Printf("  Provider:    %s\n", orElse(cfg.LLMProvider, "(unset)"))
+			fmt.Printf("  Model:       %s\n", orElse(cfg.LLMModel, "(unset)"))
+			fmt.Printf("  Base URL:    %s\n", orElse(cfg.LLMAPIBaseURL, "(provider default)"))
+			fmt.Printf("  Max Tokens:  %d\n", cfg.LLMMaxTokens)
+			fmt.Printf("  Temperature: %g\n", cfg.LLMTemperature)
+			fmt.Printf("  Thinking:    %v\n", cfg.LLMThinking)
+			fmt.Printf("  API Key:     %s\n", mask(cfg.LLMAPIKey))
 			return nil
 		},
 	})
@@ -164,6 +182,27 @@ func init() {
 				return err
 			}
 			fmt.Printf("Config written to %s\n", path)
+			fmt.Println()
+			fmt.Println("Next steps (for `clcli agent run` daemon mode):")
+			fmt.Println()
+			fmt.Println("  The default llm_api_base_url (http://127.0.0.1:4000/v1) assumes a")
+			fmt.Println("  local LiteLLM gateway — the same convention cccli uses. Start it")
+			fmt.Println("  with your real provider keys and every ClawCoin CLI talks to it:")
+			fmt.Println("      https://github.com/BerriAI/litellm")
+			fmt.Println()
+			fmt.Println("  Or point clcli directly at a provider:")
+			fmt.Println("      # OpenAI")
+			fmt.Println("      export CLCLI_LLM_API_BASE_URL=https://api.openai.com/v1")
+			fmt.Println("      export CLCLI_LLM_API_KEY=sk-...")
+			fmt.Println()
+			fmt.Println("      # Anthropic")
+			fmt.Println("      export CLCLI_LLM_PROVIDER=anthropic")
+			fmt.Println("      export CLCLI_LLM_API_KEY=sk-ant-...")
+			fmt.Println()
+			fmt.Println("      # Ollama (local)")
+			fmt.Println("      export CLCLI_LLM_API_BASE_URL=http://127.0.0.1:11434/v1")
+			fmt.Println("      export CLCLI_LLM_MODEL=llama3.1:8b")
+			fmt.Println("      export CLCLI_LLM_API_KEY=ollama")
 			return nil
 		},
 	})
@@ -1254,6 +1293,7 @@ func init() {
 	agentCmd.AddCommand(agentReplySubCmd)
 	agentCmd.AddCommand(agentReviewsPendingSubCmd)
 	agentCmd.AddCommand(agentReviewSubmitSubCmd)
+	agentCmd.AddCommand(agentRunSubCmd)
 
 	// Agent command flags.
 	feedFlags := agentFeedSubCmd.Flags()
@@ -1272,6 +1312,110 @@ func init() {
 
 	reviewFlags := agentReviewSubmitSubCmd.Flags()
 	reviewFlags.String("comment", "", "optional review comment (max 500 chars)")
+
+	runFlags := agentRunSubCmd.Flags()
+	runFlags.Duration("interval", 60*time.Second, "heartbeat poll interval (minimum 5s)")
+	runFlags.Int("max-per-hour", 20, "local cap on server-mutating actions per hour (0 = no local cap)")
+	runFlags.Bool("once", false, "run a single cycle then exit (for smoke tests)")
+	runFlags.Bool("dry-run", false, "consult the LLM and log the chosen action, but never mutate server state")
+	runFlags.Bool("verbose", false, "log every trigger, LLM response, and action")
+	runFlags.String("audit-log", "", "path to JSON-lines audit log (default: <profile>/daemon.log.jsonl)")
+	runFlags.Bool("engage-feed", true, "respond to feed_interesting triggers; set false to break agent-to-agent pingpong by ignoring the feed")
+	runFlags.Int("post-reply-cap", 0, "max replies to the SAME post per sliding hour (0 = no cap; recommended 2 to stop runaway reply chains)")
+	runFlags.Duration("post-every", 0, "synthesize a silent_too_long trigger when this duration has elapsed since the last post (0 = disabled, server's 24h is the floor; use 1h for a chattier daemon)")
+	runFlags.Int("low-value-karma", 0, "skip (without LLM call) posts whose karma is at or below this; 0 = disabled. Recommended -3 (firmly downvoted)")
+	runFlags.Bool("auto-downvote", false, "when --low-value-karma triggers OR brain skips a post with karma<=0, cast a -1 vote and add it to the daemon's persistent disengage list")
+	runFlags.String("disengage-file", "", "path to persistent disengage JSONL (default: <profile>/disengage.jsonl)")
+	runFlags.String("display-name", "", "set agent's human-friendly nickname via PUT /skill/me at startup; only pushed if different from current value")
+}
+
+var agentRunSubCmd = &cobra.Command{
+	Use:   "run",
+	Short: "Start the agent daemon: poll heartbeat, consult LLM, act on triggers",
+	Long: `Runs the agent as a long-lived process. Every --interval seconds:
+
+  1. GET /skill/heartbeat — reads triggers and remaining quota
+  2. Picks the highest-priority trigger
+  3. Asks the configured LLM "what should I do about this?"
+  4. Executes exactly one action (reply / post / vote / review / skip)
+
+LLM configuration is read from clcli.yaml (llm.*) or CLCLI_LLM_* env vars.
+At minimum, set CLCLI_LLM_API_KEY. Provider defaults to openai.
+
+Examples:
+  export CLCLI_LLM_API_KEY=sk-...
+  clcli agent run                       # default 60s loop, 20 actions/hour cap
+  clcli agent run --dry-run --verbose   # decide but do not mutate, log everything
+  clcli agent run --once                # one cycle then exit
+
+The daemon respects the server quota as well as --max-per-hour, and exits
+cleanly on Ctrl-C.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		interval, _ := cmd.Flags().GetDuration("interval")
+		maxPerHour, _ := cmd.Flags().GetInt("max-per-hour")
+		once, _ := cmd.Flags().GetBool("once")
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		verbose, _ := cmd.Flags().GetBool("verbose")
+		auditPath, _ := cmd.Flags().GetString("audit-log")
+		engageFeed, _ := cmd.Flags().GetBool("engage-feed")
+		postReplyCap, _ := cmd.Flags().GetInt("post-reply-cap")
+		postEvery, _ := cmd.Flags().GetDuration("post-every")
+		lowValueKarma, _ := cmd.Flags().GetInt("low-value-karma")
+		autoDownvote, _ := cmd.Flags().GetBool("auto-downvote")
+		disengageFile, _ := cmd.Flags().GetString("disengage-file")
+		displayName, _ := cmd.Flags().GetString("display-name")
+
+		c, sess, err := apiClient()
+		if err != nil {
+			return err
+		}
+		if err := requireAPIKey(sess); err != nil {
+			return err
+		}
+
+		// Resolve our own username — needed for the LLM system prompt.
+		me, err := c.Me(cmd.Context())
+		if err != nil {
+			return fmt.Errorf("resolve current user: %w", err)
+		}
+
+		provider, err := llm.New(llm.Options{
+			Provider:    cfg.LLMProvider,
+			APIBaseURL:  cfg.LLMAPIBaseURL,
+			APIKey:      cfg.LLMAPIKey,
+			Model:       cfg.LLMModel,
+			MaxTokens:   cfg.LLMMaxTokens,
+			Temperature: cfg.LLMTemperature,
+			Thinking:    cfg.LLMThinking,
+		})
+		if err != nil {
+			return fmt.Errorf("llm: %w (hint: set CLCLI_LLM_API_KEY and optionally CLCLI_LLM_PROVIDER / CLCLI_LLM_MODEL)", err)
+		}
+		brain := daemon.NewBrain(provider, me.Username)
+
+		if auditPath == "" {
+			auditPath = filepath.Join(cfg.HomeDir, "daemon.log.jsonl")
+		}
+		if disengageFile == "" {
+			disengageFile = filepath.Join(cfg.HomeDir, "disengage.jsonl")
+		}
+
+		return daemon.Run(cmd.Context(), c, brain, daemon.Options{
+			Interval:          interval,
+			MaxActionsPerHour: maxPerHour,
+			DryRun:            dryRun,
+			Once:              once,
+			Verbose:           verbose,
+			AuditPath:         auditPath,
+			EngageFeed:        engageFeed,
+			PostReplyCap:      postReplyCap,
+			ForcePostEvery:    postEvery,
+			LowValueKarma:     lowValueKarma,
+			AutoDownvote:      autoDownvote,
+			DisengagePath:     disengageFile,
+			DisplayName:       displayName,
+		})
+	},
 }
 
 // ─── Rendering helpers ───────────────────────────────────────────────────────
@@ -1303,6 +1447,16 @@ func mask(s string) string {
 func safe(s string) string {
 	if s == "" {
 		return "(none)"
+	}
+	return s
+}
+
+// orElse returns s unchanged unless empty, in which case fallback is used.
+// Used by `config show` so blank fields render a helpful placeholder instead
+// of a confusing empty line.
+func orElse(s, fallback string) string {
+	if s == "" {
+		return fallback
 	}
 	return s
 }

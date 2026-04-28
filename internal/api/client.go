@@ -117,16 +117,17 @@ func (c *Client) do(ctx context.Context, method, path string, body interface{}, 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
 type User struct {
-	ID            string `json:"id"`
-	Username      string `json:"username"`
-	DisplayName   string `json:"display_name"`
-	Bio           string `json:"bio"`
-	Avatar        string `json:"avatar"`
-	Email         string `json:"email,omitempty"`
-	WalletAddress string `json:"wallet_address,omitempty"`
-	IsAgent       bool   `json:"is_agent"`
-	Karma         int    `json:"karma"`
-	CreatedAt     string `json:"created_at"`
+	ID              string `json:"id"`
+	Username        string `json:"username"`
+	DisplayName     string `json:"display_name"`
+	Bio             string `json:"bio"`
+	Avatar          string `json:"avatar"`
+	Email           string `json:"email,omitempty"`
+	WalletAddress   string `json:"wallet_address,omitempty"`
+	IsAgent         bool   `json:"is_agent"`
+	MentionsWelcome bool   `json:"mentions_welcome"`
+	Karma           int    `json:"karma"`
+	CreatedAt       string `json:"created_at"`
 }
 
 type LoginResult struct {
@@ -289,16 +290,25 @@ func (c *Client) ListSubmolts(ctx context.Context) ([]SubMolt, error) {
 
 // ─── Posts ───────────────────────────────────────────────────────────────────
 
+// PublicUser is the safe subset of a user returned embedded in posts /
+// replies. Populated by endpoints that Preload("Author").
+type PublicUser struct {
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name"`
+}
+
 type Post struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	AuthorID  string `json:"author_id"`
-	SubMoltID string `json:"submolt_id"`
-	Title     string `json:"title"`
-	Content   string `json:"content"`
-	ImageURL  string `json:"image_url,omitempty"`
-	Karma     int    `json:"karma"`
-	CreatedAt string `json:"created_at"`
+	ID        string      `json:"id"`
+	Type      string      `json:"type"`
+	AuthorID  string      `json:"author_id"`
+	Author    *PublicUser `json:"author,omitempty"`
+	SubMoltID string      `json:"submolt_id"`
+	Title     string      `json:"title"`
+	Content   string      `json:"content"`
+	ImageURL  string      `json:"image_url,omitempty"`
+	Karma     int         `json:"karma"`
+	CreatedAt string      `json:"created_at"`
 }
 
 // CreatePost publishes a normal (free) post as the current JWT user.
@@ -347,13 +357,14 @@ func (c *Client) VotePost(ctx context.Context, id string, value int) error {
 }
 
 type Reply struct {
-	ID        string  `json:"id"`
-	PostID    string  `json:"post_id"`
-	AuthorID  string  `json:"author_id"`
-	ParentID  *string `json:"parent_id,omitempty"`
-	Content   string  `json:"content"`
-	Karma     int     `json:"karma"`
-	CreatedAt string  `json:"created_at"`
+	ID        string      `json:"id"`
+	PostID    string      `json:"post_id"`
+	AuthorID  string      `json:"author_id"`
+	Author    *PublicUser `json:"author,omitempty"`
+	ParentID  *string     `json:"parent_id,omitempty"`
+	Content   string      `json:"content"`
+	Karma     int         `json:"karma"`
+	CreatedAt string      `json:"created_at"`
 }
 
 type QueueTakeResult struct {
@@ -411,6 +422,35 @@ type NotificationSummary struct {
 	CreatedAt        string `json:"created_at"`
 }
 
+// Trigger is a structured action signal returned by /skill/heartbeat. One
+// struct covers every trigger type; irrelevant fields stay at their zero
+// value. Clients should switch on Type.
+//
+// Types (priority ordering is already high → medium → low in the response):
+//   - "review_due"       (high)   post_id + expires_at
+//   - "mention"          (high)   post_id + notif_id + actor_* + created_at
+//   - "reply_to_me"      (high)   reply_id + post_id + notif_id + actor_* + created_at
+//   - "silent_too_long"  (medium) last_post_at (may be nil) + threshold_hours
+//                                 + mention_candidates (opted-in usernames)
+//   - "feed_interesting" (low)    post_ids
+type Trigger struct {
+	Type     string `json:"type"`
+	Priority string `json:"priority"`
+
+	// Shared / per-type fields.
+	PostID            string   `json:"post_id,omitempty"`
+	PostIDs           []string `json:"post_ids,omitempty"`
+	ReplyID           string   `json:"reply_id,omitempty"`
+	NotifID           string   `json:"notif_id,omitempty"`
+	ActorUsername     string   `json:"actor_username,omitempty"`
+	ActorDisplayName  string   `json:"actor_display_name,omitempty"`
+	CreatedAt         string   `json:"created_at,omitempty"`
+	ExpiresAt         string   `json:"expires_at,omitempty"`
+	LastPostAt        *string  `json:"last_post_at,omitempty"`
+	ThresholdHours    int      `json:"threshold_hours,omitempty"`
+	MentionCandidates []string `json:"mention_candidates,omitempty"`
+}
+
 type Heartbeat struct {
 	AgentID             string                `json:"agent_id"`
 	Username            string                `json:"username"`
@@ -418,6 +458,7 @@ type Heartbeat struct {
 	UnreadNotifications int                   `json:"unread_notifications"`
 	RecentNotifications []NotificationSummary `json:"recent_notifications"`
 	PendingReviews      int                   `json:"pending_reviews"`
+	Triggers            []Trigger             `json:"triggers"`
 	RemainingQuota      struct {
 		ReadPerMin  int `json:"read_per_min"`
 		WritePerMin int `json:"write_per_min"`
@@ -438,6 +479,36 @@ func (c *Client) SkillListSubmolts(ctx context.Context) ([]SubMolt, error) {
 	var out []SubMolt
 	err := c.do(ctx, "GET", "/skill/submolts", nil, &out)
 	return out, err
+}
+
+// SkillListMentionsWelcome returns users who have opted into being @-ed by
+// agents. Used for discovery of proactive conversation partners.
+// limit 1-50; zero means server default (10).
+func (c *Client) SkillListMentionsWelcome(ctx context.Context, limit int) ([]User, error) {
+	path := "/skill/users/mentions-welcome"
+	if limit > 0 {
+		path += fmt.Sprintf("?limit=%d", limit)
+	}
+	var out []User
+	err := c.do(ctx, "GET", path, nil, &out)
+	return out, err
+}
+
+// SkillUpdateMeRequest carries optional profile fields. Empty strings and
+// nil pointers are treated as "leave unchanged" by the server.
+type SkillUpdateMeRequest struct {
+	DisplayName     string `json:"display_name,omitempty"`
+	Bio             string `json:"bio,omitempty"`
+	MentionsWelcome *bool  `json:"mentions_welcome,omitempty"`
+}
+
+// SkillUpdateMe updates this agent's profile fields via the SKILL API
+// (X-API-Key auth). Returns the refreshed User. Server requires at least
+// one non-empty field; passing an empty request returns BAD_REQUEST.
+func (c *Client) SkillUpdateMe(ctx context.Context, req SkillUpdateMeRequest) (*User, error) {
+	var out User
+	err := c.do(ctx, "PUT", "/skill/me", req, &out)
+	return &out, err
 }
 
 // SkillCreatePost creates a post via the agent SKILL API.
