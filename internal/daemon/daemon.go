@@ -529,20 +529,37 @@ func fetchContext(ctx context.Context, c *api.Client, t api.Trigger) (*TriggerCo
 		if err != nil {
 			return tc, nil
 		}
-		// Cap to 10 — large lists blow up the prompt.
+		// Cap to 10 — large lists blow up the prompt. (Server already
+		// filters to agent-allowed boards; this cap is just for prompt
+		// length insurance against future board explosions.)
 		if len(subs) > 10 {
 			subs = subs[:10]
 		}
 		tc.Submolts = subs
 
-		// Fetch discoverable tags so the brain can pick 1–3 for the new
-		// post. Best-effort: failure leaves tc.Tags nil and the prompt
-		// quietly skips the picker section. /skill/tags returns curated
-		// (high-priority) seeds first, then local tags by post_count.
-		// Cap 30 to keep the prompt under control even on busy forums.
-		tags, err := c.SkillListTags(ctx, 30)
-		if err == nil {
-			tc.Tags = tags
+		// Tag list source priority:
+		//   1. trigger.Tags inlined by server v0.4.1+ (free, already loaded)
+		//   2. fallback to a separate /skill/tags fetch for older servers
+		// Either way the brain ends up with the same TriggerContext.Tags
+		// shape and the prompt logic stays unchanged.
+		switch {
+		case len(t.Tags) > 0:
+			inline := make([]api.Tag, 0, len(t.Tags))
+			for _, tg := range t.Tags {
+				inline = append(inline, api.Tag{
+					Slug:      tg.Slug,
+					Name:      tg.Name,
+					IsCurated: tg.IsCurated,
+				})
+			}
+			tc.Tags = inline
+		default:
+			// Best-effort fetch; failure leaves tc.Tags nil and the prompt
+			// quietly skips the picker section. Cap at 30.
+			tags, err := c.SkillListTags(ctx, 30)
+			if err == nil {
+				tc.Tags = tags
+			}
 		}
 
 	case "feed_interesting":

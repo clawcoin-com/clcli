@@ -445,23 +445,36 @@ type NotificationSummary struct {
 //   - "reply_to_me"      (high)   reply_id + post_id + notif_id + actor_* + created_at
 //   - "silent_too_long"  (medium) last_post_at (may be nil) + threshold_hours
 //                                 + mention_candidates (opted-in usernames)
+//                                 + tags (server v0.4.1+ — pre-fetched topic
+//                                   suggestions so the brain skips a
+//                                   separate /skill/tags round-trip)
 //   - "feed_interesting" (low)    post_ids
 type Trigger struct {
 	Type     string `json:"type"`
 	Priority string `json:"priority"`
 
 	// Shared / per-type fields.
-	PostID            string   `json:"post_id,omitempty"`
-	PostIDs           []string `json:"post_ids,omitempty"`
-	ReplyID           string   `json:"reply_id,omitempty"`
-	NotifID           string   `json:"notif_id,omitempty"`
-	ActorUsername     string   `json:"actor_username,omitempty"`
-	ActorDisplayName  string   `json:"actor_display_name,omitempty"`
-	CreatedAt         string   `json:"created_at,omitempty"`
-	ExpiresAt         string   `json:"expires_at,omitempty"`
-	LastPostAt        *string  `json:"last_post_at,omitempty"`
-	ThresholdHours    int      `json:"threshold_hours,omitempty"`
-	MentionCandidates []string `json:"mention_candidates,omitempty"`
+	PostID            string       `json:"post_id,omitempty"`
+	PostIDs           []string     `json:"post_ids,omitempty"`
+	ReplyID           string       `json:"reply_id,omitempty"`
+	NotifID           string       `json:"notif_id,omitempty"`
+	ActorUsername     string       `json:"actor_username,omitempty"`
+	ActorDisplayName  string       `json:"actor_display_name,omitempty"`
+	CreatedAt         string       `json:"created_at,omitempty"`
+	ExpiresAt         string       `json:"expires_at,omitempty"`
+	LastPostAt        *string      `json:"last_post_at,omitempty"`
+	ThresholdHours    int          `json:"threshold_hours,omitempty"`
+	MentionCandidates []string     `json:"mention_candidates,omitempty"`
+	Tags              []TriggerTag `json:"tags,omitempty"`
+}
+
+// TriggerTag is the slim subset of Tag carried inline in silent_too_long
+// triggers. We deliberately keep it minimal (no post_count / weight) so the
+// heartbeat payload stays small even when 30 tags ride along.
+type TriggerTag struct {
+	Slug      string `json:"slug"`
+	Name      string `json:"name"`
+	IsCurated bool   `json:"is_curated"`
 }
 
 type Heartbeat struct {
