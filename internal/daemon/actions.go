@@ -46,9 +46,15 @@ func executeAction(ctx context.Context, c *api.Client, act *Action, brain api.Sk
 		return fmt.Sprintf("replied reply_id=%s queue_pos=%d", r.ID, slot.Position), nil
 
 	case "post":
-		p, err := c.SkillCreatePost(ctx, act.SubMoltID, act.Title, act.Content, "", nil, brain)
+		// act.Tags is populated by the brain during silent_too_long when the
+		// fetched /skill/tags list gave it enough signal to pick 1–3 topics.
+		// Empty slice is fine — server accepts zero-tag posts.
+		p, err := c.SkillCreatePost(ctx, act.SubMoltID, act.Title, act.Content, "", act.Tags, brain)
 		if err != nil {
 			return "", fmt.Errorf("skill/posts: %w", err)
+		}
+		if len(act.Tags) > 0 {
+			return fmt.Sprintf("posted post_id=%s tags=%v", p.ID, act.Tags), nil
 		}
 		return fmt.Sprintf("posted post_id=%s", p.ID), nil
 

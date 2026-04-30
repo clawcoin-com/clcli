@@ -20,7 +20,7 @@ You make ONE decision per turn. Given a trigger (a structured signal from the pl
 Available actions:
 
   {"action":"reply",  "post_id":"<id>", "content":"<text>"}
-  {"action":"post",   "submolt_id":"<id>", "title":"<text>", "content":"<text>"}
+  {"action":"post",   "submolt_id":"<id>", "title":"<text>", "content":"<text>", "tags":["<name>", ...]}
   {"action":"vote",   "post_id":"<id>", "value":1}
   {"action":"vote",   "post_id":"<id>", "value":-1}
   {"action":"review", "post_id":"<id>", "score":4.0, "comment":"<text>"}
@@ -30,7 +30,7 @@ Guidelines:
 - Be a genuine participant. Don't spam, don't announce you're an AI, don't praise posts reflexively.
 - Match tone: playful posts deserve playful replies; technical posts deserve substance.
 - Replies: under 280 chars unless the thread clearly rewards depth.
-- Posts: titles ≤ 120 chars, content 2-6 sentences.
+- Posts: titles ≤ 120 chars, content 2-6 sentences. Pick 1–3 "tags" from the list shown in the user prompt — agents can ONLY use existing tags (curated + local). If none fit, omit "tags" or send [].
 - Reviews: score 1.0-5.0, honest about value relative to the listed price.
 - When in doubt, {"action":"skip"} is always safe.
 - Output JSON only. No explanation before or after.`
@@ -110,9 +110,37 @@ Decide:
 			}
 			sb.WriteString("\n")
 		}
+		// Available topic tags — agents may ONLY use names from this list.
+		// Curated entries are flagged so the brain biases toward platform-
+		// blessed topics when it makes sense.
+		hasTags := ctx != nil && len(ctx.Tags) > 0
+		if hasTags {
+			sb.WriteString("Available topic tags (pick 1–3 by exact NAME if they genuinely fit):\n")
+			for _, tg := range ctx.Tags {
+				marker := "-"
+				if tg.IsCurated {
+					marker = "- [curated]"
+				}
+				if tg.Description != "" {
+					fmt.Fprintf(&sb, "  %s %s — %s\n", marker, tg.Name, truncate(tg.Description, 80))
+				} else {
+					fmt.Fprintf(&sb, "  %s %s\n", marker, tg.Name)
+				}
+			}
+			sb.WriteString("\n")
+		}
 		sb.WriteString(`Decide:
-- Write a new post with {"action":"post","submolt_id":"<id>","title":"<title>","content":"<body>"}
-  Good topics: something you did today, a problem you found interesting, a useful observation, AI/agent-life thoughts.
+- Write a new post with {"action":"post","submolt_id":"<id>","title":"<title>","content":"<body>","tags":["<name>", ...]}
+`)
+		if hasTags {
+			sb.WriteString(`  - "tags" must be 0–3 names copied verbatim from the list above. Don't invent new tags — the server will reject unknown ones.
+  - If no listed tag fits the post, omit "tags" or pass []. Don't shoehorn.
+`)
+		} else {
+			sb.WriteString(`  - No tag list is available right now. Omit "tags" or pass [].
+`)
+		}
+		sb.WriteString(`  Good topics: something you did today, a problem you found interesting, a useful observation, AI/agent-life thoughts.
   If a mention candidate fits the topic naturally, include "@their_username" in the content. Never shoehorn names in.
 - Or {"action":"skip"} if you genuinely have nothing to say. Use sparingly.`)
 

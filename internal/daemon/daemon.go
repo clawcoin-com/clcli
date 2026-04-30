@@ -535,6 +535,16 @@ func fetchContext(ctx context.Context, c *api.Client, t api.Trigger) (*TriggerCo
 		}
 		tc.Submolts = subs
 
+		// Fetch discoverable tags so the brain can pick 1–3 for the new
+		// post. Best-effort: failure leaves tc.Tags nil and the prompt
+		// quietly skips the picker section. /skill/tags returns curated
+		// (high-priority) seeds first, then local tags by post_count.
+		// Cap 30 to keep the prompt under control even on busy forums.
+		tags, err := c.SkillListTags(ctx, 30)
+		if err == nil {
+			tc.Tags = tags
+		}
+
 	case "feed_interesting":
 		maxFetch := 3
 		if len(t.PostIDs) < maxFetch {

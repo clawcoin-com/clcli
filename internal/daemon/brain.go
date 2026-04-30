@@ -15,23 +15,34 @@ import (
 //
 // Type values: "reply" | "post" | "vote" | "review" | "skip"
 type Action struct {
-	Type      string  `json:"action"`
-	PostID    string  `json:"post_id,omitempty"`
-	SubMoltID string  `json:"submolt_id,omitempty"`
-	Title     string  `json:"title,omitempty"`
-	Content   string  `json:"content,omitempty"`
-	Value     int     `json:"value,omitempty"`
-	Score     float64 `json:"score,omitempty"`
-	Comment   string  `json:"comment,omitempty"`
+	Type      string   `json:"action"`
+	PostID    string   `json:"post_id,omitempty"`
+	SubMoltID string   `json:"submolt_id,omitempty"`
+	Title     string   `json:"title,omitempty"`
+	Content   string   `json:"content,omitempty"`
+	// Tags carry 0–3 topic-tag names the brain picks for "post" actions.
+	// Server-side rule: agents may only use EXISTING tags (curated + local).
+	// We surface the available list to the brain via TriggerContext.Tags
+	// during silent_too_long; if the brain hallucinates an unknown tag the
+	// server returns 400 and the whole post creation fails — keep the prompt
+	// strict so this stays rare.
+	Tags    []string `json:"tags,omitempty"`
+	Value   int      `json:"value,omitempty"`
+	Score   float64  `json:"score,omitempty"`
+	Comment string   `json:"comment,omitempty"`
 }
 
 // TriggerContext bundles fetched context that the brain may need to decide
 // well. The daemon populates only the fields that make sense per trigger
 // type — see daemon.go fetchContext.
 type TriggerContext struct {
-	Thread   *api.Thread     // for review_due / mention / reply_to_me
-	Submolts []api.SubMolt   // for silent_too_long
-	Posts    []api.Post      // for feed_interesting (resolved post details)
+	Thread   *api.Thread   // for review_due / mention / reply_to_me
+	Submolts []api.SubMolt // for silent_too_long
+	Posts    []api.Post    // for feed_interesting (resolved post details)
+	// Tags are the discoverable topic tags returned by /skill/tags. Populated
+	// for silent_too_long so the new-post prompt can render the picker list.
+	// Curated tags come first (sorted server-side).
+	Tags []api.Tag
 }
 
 // Brain wraps a Provider with prompt construction and response parsing.
@@ -122,6 +133,30 @@ func validateAction(a *Action) error {
 		}
 		if strings.TrimSpace(a.Content) == "" {
 			return fmt.Errorf(`"post" requires non-empty content`)
+		}
+		// Normalize tags: strip whitespace, drop empties, cap at 3 to match
+		// the server's max-3-tags-per-post rule. The server enforces "tag
+		// must already exist" — we don't pre-check here; if the brain
+		// hallucinates a name the server returns 400 with a clear message
+		// and the audit log records the failure.
+		if len(a.Tags) > 0 {
+			cleaned := make([]string, 0, len(a.Tags))
+			seen := map[string]struct{}{}
+			for _, t := range a.Tags {
+				t = strings.TrimSpace(t)
+				if t == "" {
+					continue
+				}
+				if _, dup := seen[t]; dup {
+					continue
+				}
+				seen[t] = struct{}{}
+				cleaned = append(cleaned, t)
+			}
+			if len(cleaned) > 3 {
+				cleaned = cleaned[:3]
+			}
+			a.Tags = cleaned
 		}
 	case "vote":
 		if a.PostID == "" {
