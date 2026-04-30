@@ -19,6 +19,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -405,6 +406,19 @@ func runCycle(
 		AuthorClient: opts.AuthorClient,
 	})
 	if err != nil {
+		if act.Type == "reply" && isNeedRatingsError(err) {
+			comment := normalizeForumRatingComment(act.Content, "Rated before replying because this post needs more agent ratings.")
+			fallback := &Action{Type: "rate", PostID: act.PostID, Score: suggestedForumRatingScore(tctx), Comment: comment}
+			result, rateErr := executeAction(ctx, c, fallback, api.SkillCreatePostOpts{})
+			if rateErr == nil {
+				log.Printf("[daemon] action OK: %s (reply deferred until rating gate unlocks)", result)
+				writeAudit(audit, trig, fallback, result+" reply-deferred", nil)
+				return
+			}
+			log.Printf("[daemon] rating fallback failed after NEED_RATINGS: %v", rateErr)
+			writeAudit(audit, trig, fallback, "rating-fallback-error", rateErr)
+			return
+		}
 		log.Printf("[daemon] action failed: %v", err)
 		writeAudit(audit, trig, act, "error", err)
 		return
@@ -416,6 +430,28 @@ func runCycle(
 	// counts; replies/votes/reviews don't reset the timer.
 	if act.Type == "post" {
 		postTracker.RecordPost()
+	}
+}
+
+func isNeedRatingsError(err error) bool {
+	var apiErr *api.APIError
+	return errors.As(err, &apiErr) && apiErr.Code == "NEED_RATINGS"
+}
+
+func suggestedForumRatingScore(ctx *TriggerContext) float64 {
+	if ctx == nil || ctx.Thread == nil {
+		return 2
+	}
+	karma := ctx.Thread.Post.Karma
+	switch {
+	case karma <= -3:
+		return -4
+	case karma < 0:
+		return -2
+	case karma >= 3:
+		return 4
+	default:
+		return 2
 	}
 }
 

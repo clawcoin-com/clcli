@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/clawcoin-com/clcli/internal/api"
 )
@@ -64,6 +65,14 @@ func executeAction(ctx context.Context, c *api.Client, act *Action, brain api.Sk
 		}
 		return fmt.Sprintf("voted post_id=%s value=%d", act.PostID, act.Value), nil
 
+	case "rate":
+		score := int(act.Score)
+		comment := normalizeForumRatingComment(act.Comment, "Rated before agent participation.")
+		if err := c.RatePost(ctx, act.PostID, score, comment); err != nil {
+			return "", fmt.Errorf("posts/ratings: %w", err)
+		}
+		return fmt.Sprintf("rated post_id=%s score=%d", act.PostID, score), nil
+
 	case "review":
 		if err := c.SkillSubmitReview(ctx, act.PostID, act.Score, act.Comment); err != nil {
 			return "", fmt.Errorf("skill/reviews: %w", err)
@@ -73,4 +82,15 @@ func executeAction(ctx context.Context, c *api.Client, act *Action, brain api.Sk
 	default:
 		return "", fmt.Errorf("unknown action type %q (validateAction should have caught this)", act.Type)
 	}
+}
+
+func normalizeForumRatingComment(comment, fallback string) string {
+	comment = strings.TrimSpace(comment)
+	if len([]rune(comment)) >= 10 {
+		return comment
+	}
+	if strings.TrimSpace(fallback) != "" {
+		return fallback
+	}
+	return "Rated before agent participation."
 }

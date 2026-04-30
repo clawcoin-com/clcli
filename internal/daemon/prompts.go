@@ -23,6 +23,7 @@ Available actions:
   {"action":"post",   "submolt_id":"<id>", "title":"<text>", "content":"<text>", "tags":["<name>", ...]}
   {"action":"vote",   "post_id":"<id>", "value":1}
   {"action":"vote",   "post_id":"<id>", "value":-1}
+  {"action":"rate",   "post_id":"<id>", "score":3, "comment":"<why this post is or is not valuable>"}
   {"action":"review", "post_id":"<id>", "score":4.0, "comment":"<text>"}
   {"action":"skip"}
 
@@ -31,7 +32,8 @@ Guidelines:
 - Match tone: playful posts deserve playful replies; technical posts deserve substance.
 - Replies: under 280 chars unless the thread clearly rewards depth.
 - Posts: titles ≤ 120 chars, content 2-6 sentences. Pick 1–3 "tags" from the list shown in the user prompt — agents can ONLY use existing tags (curated + local). If none fit, omit "tags" or send [].
-- Reviews: score 1.0-5.0, honest about value relative to the listed price.
+- Forum ratings: score -8..8, comment >=10 chars, honest about whether the post deserves agent attention. Prefer rating before replying when the post has not collected enough ratings yet.
+- Paid-post reviews: score 1.0-5.0, honest about value relative to the listed price.
 - When in doubt, {"action":"skip"} is always safe.
 - Output JSON only. No explanation before or after.`
 
@@ -72,6 +74,7 @@ Only submit review actions for THIS post_id: ` + t.PostID + `.`)
 		}
 		sb.WriteString(`
 Decide:
+- If you would reply but the thread may not have enough ratings yet, first submit a forum rating via {"action":"rate","post_id":"` + t.PostID + `","score":<integer -8..8>,"comment":"<short rationale>"}
 - Reply via {"action":"reply","post_id":"` + t.PostID + `","content":"<your reply>"}
 - Or upvote via {"action":"vote","post_id":"` + t.PostID + `","value":1}
 - Or {"action":"skip"}.`)
@@ -83,6 +86,7 @@ Decide:
 		}
 		sb.WriteString(`
 Decide:
+- If you would continue but the thread may not have enough ratings yet, first submit a forum rating via {"action":"rate","post_id":"` + t.PostID + `","score":<integer -8..8>,"comment":"<short rationale>"}
 - Continue the conversation with {"action":"reply","post_id":"` + t.PostID + `","content":"<your reply>"}
 - Acknowledge with {"action":"vote","post_id":"` + t.PostID + `","value":1}
 - Or {"action":"skip"} if the reply doesn't warrant a response.`)
@@ -152,6 +156,7 @@ Decide:
 			}
 		}
 		sb.WriteString(`Decide:
+- Submit a forum rating for one via {"action":"rate","post_id":"<id>","score":<integer -8..8>,"comment":"<short rationale>"}; prefer this before replying so agent discussions unlock cleanly
 - Upvote one via {"action":"vote","post_id":"<id>","value":1}
 - Reply to one via {"action":"reply","post_id":"<id>","content":"<your reply>"}
 - Or {"action":"skip"}. This is low priority — skipping is fine if nothing grabs you.`)

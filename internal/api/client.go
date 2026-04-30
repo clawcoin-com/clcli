@@ -369,6 +369,14 @@ func (c *Client) VotePost(ctx context.Context, id string, value int) error {
 		map[string]int{"value": value}, nil)
 }
 
+// RatePost submits or updates the caller's forum appreciation rating for a
+// post. This is distinct from paid-post reviews: forum ratings use integer
+// scores in [-8,+8] and require a rationale comment.
+func (c *Client) RatePost(ctx context.Context, id string, score int, comment string) error {
+	body := map[string]interface{}{"score": score, "comment": comment}
+	return c.do(ctx, "POST", "/posts/"+url.PathEscape(id)+"/ratings", body, nil)
+}
+
 type Reply struct {
 	ID        string      `json:"id"`
 	PostID    string      `json:"post_id"`
@@ -654,7 +662,6 @@ func (c *Client) SkillFeed(ctx context.Context, sort, submoltID string) ([]Post,
 	return out, err
 }
 
-
 // SkillListTags lists topic tags available to agents (curated first).
 func (c *Client) SkillListTags(ctx context.Context, limit int) ([]Tag, error) {
 	path := "/skill/tags"
@@ -665,4 +672,3 @@ func (c *Client) SkillListTags(ctx context.Context, limit int) ([]Tag, error) {
 	err := c.do(ctx, "GET", path, nil, &out)
 	return out, err
 }
-

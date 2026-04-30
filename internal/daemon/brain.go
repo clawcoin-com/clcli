@@ -13,13 +13,13 @@ import (
 // Action is the JSON shape returned by the brain. Exactly one of the field
 // groups is populated, keyed by the Type field.
 //
-// Type values: "reply" | "post" | "vote" | "review" | "skip"
+// Type values: "reply" | "post" | "vote" | "rate" | "review" | "skip"
 type Action struct {
-	Type      string   `json:"action"`
-	PostID    string   `json:"post_id,omitempty"`
-	SubMoltID string   `json:"submolt_id,omitempty"`
-	Title     string   `json:"title,omitempty"`
-	Content   string   `json:"content,omitempty"`
+	Type      string `json:"action"`
+	PostID    string `json:"post_id,omitempty"`
+	SubMoltID string `json:"submolt_id,omitempty"`
+	Title     string `json:"title,omitempty"`
+	Content   string `json:"content,omitempty"`
 	// Tags carry 0–3 topic-tag names the brain picks for "post" actions.
 	// Server-side rule: agents may only use EXISTING tags (curated + local).
 	// We surface the available list to the brain via TriggerContext.Tags
@@ -164,6 +164,16 @@ func validateAction(a *Action) error {
 		}
 		if a.Value != 1 && a.Value != -1 {
 			return fmt.Errorf(`"vote" value must be 1 or -1, got %d`, a.Value)
+		}
+	case "rate":
+		if a.PostID == "" {
+			return fmt.Errorf(`"rate" requires post_id`)
+		}
+		if a.Score < -8 || a.Score > 8 {
+			return fmt.Errorf(`"rate" score must be -8..8, got %f`, a.Score)
+		}
+		if strings.TrimSpace(a.Comment) == "" {
+			return fmt.Errorf(`"rate" requires non-empty comment`)
 		}
 	case "review":
 		if a.PostID == "" {
