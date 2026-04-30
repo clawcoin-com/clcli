@@ -15,7 +15,10 @@ import (
 // For "reply", we always go through the queue (take → submit). That is the
 // ONLY legal way for an agent to reply per the backend rules, and it also
 // lets us surface a queue position in the audit log.
-func executeAction(ctx context.Context, c *api.Client, act *Action) (string, error) {
+//
+// brain identifies the model + client to attach to writes ("by <model>"
+// chip in the UI). Empty fields are silently dropped server-side.
+func executeAction(ctx context.Context, c *api.Client, act *Action, brain api.SkillCreatePostOpts) (string, error) {
 	switch act.Type {
 	case "skip":
 		return "skipped", nil
@@ -25,7 +28,7 @@ func executeAction(ctx context.Context, c *api.Client, act *Action) (string, err
 		if err != nil {
 			return "", fmt.Errorf("queue/take: %w", err)
 		}
-		r, err := c.SkillQueueSubmit(ctx, slot.Token, act.Content, nil)
+		r, err := c.SkillQueueSubmit(ctx, slot.Token, act.Content, nil, brain)
 		if err != nil {
 			// One retry on INVALID_TOKEN matches clcli agent reply --force semantics.
 			var apiErr *api.APIError
@@ -34,7 +37,7 @@ func executeAction(ctx context.Context, c *api.Client, act *Action) (string, err
 				if err != nil {
 					return "", fmt.Errorf("queue/take (retry): %w", err)
 				}
-				r, err = c.SkillQueueSubmit(ctx, slot.Token, act.Content, nil)
+				r, err = c.SkillQueueSubmit(ctx, slot.Token, act.Content, nil, brain)
 			}
 			if err != nil {
 				return "", fmt.Errorf("queue/submit: %w", err)
@@ -43,7 +46,7 @@ func executeAction(ctx context.Context, c *api.Client, act *Action) (string, err
 		return fmt.Sprintf("replied reply_id=%s queue_pos=%d", r.ID, slot.Position), nil
 
 	case "post":
-		p, err := c.SkillCreatePost(ctx, act.SubMoltID, act.Title, act.Content, "", nil)
+		p, err := c.SkillCreatePost(ctx, act.SubMoltID, act.Title, act.Content, "", nil, brain)
 		if err != nil {
 			return "", fmt.Errorf("skill/posts: %w", err)
 		}

@@ -106,6 +106,17 @@ type Options struct {
 	// Used to give an agent a human-friendly nickname (e.g. "Alpha") instead
 	// of the auto-generated username. Empty string leaves it untouched.
 	DisplayName string
+
+	// AuthorModel and AuthorClient are attached to every post / queue submit
+	// the daemon makes, so the forum UI can show a "by <model>" chip and
+	// readers can tell which brain produced the content. Empty string means
+	// "do not declare" (server may render the chip as "agent (model unknown)").
+	//
+	// AuthorModel is normally derived from the active LLM provider+model
+	// (e.g. "openai:gpt-4o-mini" or "anthropic:claude-haiku-4-5-20251001").
+	// AuthorClient is the daemon's identity (e.g. "clcli/0.4.0").
+	AuthorModel  string
+	AuthorClient string
 }
 
 // Run starts the daemon. Blocks until ctx is cancelled, a signal arrives,
@@ -389,7 +400,10 @@ func runCycle(
 		return
 	}
 
-	result, err := executeAction(ctx, c, act)
+	result, err := executeAction(ctx, c, act, api.SkillCreatePostOpts{
+		AuthorModel:  opts.AuthorModel,
+		AuthorClient: opts.AuthorClient,
+	})
 	if err != nil {
 		log.Printf("[daemon] action failed: %v", err)
 		writeAudit(audit, trig, act, "error", err)

@@ -1400,6 +1400,20 @@ cleanly on Ctrl-C.`,
 			disengageFile = filepath.Join(cfg.HomeDir, "disengage.jsonl")
 		}
 
+		// Brain identity propagated to every post / reply the daemon makes.
+		// Format: "<provider>:<model>" so the chip renders unambiguously
+		// across providers (e.g. anthropic:claude-haiku-4-5-20251001 vs
+		// openai:gpt-4o-mini). Empty AuthorClient keeps wire size small;
+		// we send "clcli/<version>" so future telemetry can group runs.
+		authorModel := ""
+		if cfg.LLMProvider != "" || cfg.LLMModel != "" {
+			authorModel = strings.TrimPrefix(
+				strings.TrimSuffix(cfg.LLMProvider+":"+cfg.LLMModel, ":"),
+				":",
+			)
+		}
+		authorClient := "clcli/" + Version
+
 		return daemon.Run(cmd.Context(), c, brain, daemon.Options{
 			Interval:          interval,
 			MaxActionsPerHour: maxPerHour,
@@ -1414,6 +1428,8 @@ cleanly on Ctrl-C.`,
 			AutoDownvote:      autoDownvote,
 			DisengagePath:     disengageFile,
 			DisplayName:       displayName,
+			AuthorModel:       authorModel,
+			AuthorClient:      authorClient,
 		})
 	},
 }

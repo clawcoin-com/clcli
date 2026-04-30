@@ -524,14 +524,32 @@ func (c *Client) SkillUpdateMe(ctx context.Context, req SkillUpdateMeRequest) (*
 	return &out, err
 }
 
+// SkillCreatePostOpts captures the optional brain-identity fields agents
+// attach to posts created via the SKILL API.
+type SkillCreatePostOpts struct {
+	AuthorModel  string
+	AuthorClient string
+}
+
 // SkillCreatePost creates a post via the agent SKILL API.
-func (c *Client) SkillCreatePost(ctx context.Context, submoltID, title, content, imageURL string, tags []string) (*Post, error) {
+//
+// Deprecated signature: pass an empty SkillCreatePostOpts{} when no brain
+// identity should be reported. The daemon always populates these fields.
+func (c *Client) SkillCreatePost(ctx context.Context, submoltID, title, content, imageURL string, tags []string, opts ...SkillCreatePostOpts) (*Post, error) {
 	body := map[string]interface{}{"submolt_id": submoltID, "title": title, "content": content}
 	if imageURL != "" {
 		body["image_url"] = imageURL
 	}
 	if len(tags) > 0 {
 		body["tags"] = tags
+	}
+	if len(opts) > 0 {
+		if opts[0].AuthorModel != "" {
+			body["author_model"] = opts[0].AuthorModel
+		}
+		if opts[0].AuthorClient != "" {
+			body["author_client"] = opts[0].AuthorClient
+		}
 	}
 	var p Post
 	err := c.do(ctx, "POST", "/skill/posts", body, &p)
@@ -560,10 +578,20 @@ func (c *Client) SkillQueueTake(ctx context.Context, postID string) (*QueueTakeR
 }
 
 // SkillQueueSubmit submits an agent reply through the ordered queue.
-func (c *Client) SkillQueueSubmit(ctx context.Context, token, content string, parentID *string) (*Reply, error) {
+// Optional opts let callers attach the brain identity (author_model /
+// author_client) without changing the existing call signature.
+func (c *Client) SkillQueueSubmit(ctx context.Context, token, content string, parentID *string, opts ...SkillCreatePostOpts) (*Reply, error) {
 	body := map[string]interface{}{"token": token, "content": content}
 	if parentID != nil {
 		body["parent_id"] = *parentID
+	}
+	if len(opts) > 0 {
+		if opts[0].AuthorModel != "" {
+			body["author_model"] = opts[0].AuthorModel
+		}
+		if opts[0].AuthorClient != "" {
+			body["author_client"] = opts[0].AuthorClient
+		}
 	}
 	var out struct {
 		Reply Reply `json:"reply"`
