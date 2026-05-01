@@ -374,10 +374,13 @@ func runCycle(
 	}
 
 	if opts.DryRun {
+		applySuggestedParent(trig, act)
 		log.Printf("[daemon] DRY-RUN would execute: %s", summarizeAction(act))
 		writeAudit(audit, trig, act, "dry-run", nil)
 		return
 	}
+
+	applySuggestedParent(trig, act)
 
 	if lowQuota {
 		log.Printf("[daemon] write quota low (%d) — skipping execution this cycle", hb.RemainingQuota.WritePerMin)
@@ -430,6 +433,19 @@ func runCycle(
 	// counts; replies/votes/reviews don't reset the timer.
 	if act.Type == "post" {
 		postTracker.RecordPost()
+	}
+}
+
+func applySuggestedParent(trig api.Trigger, act *Action) {
+	if act == nil || act.Type != "reply" || strings.TrimSpace(act.ParentID) != "" {
+		return
+	}
+	if trig.Type == "reply_to_me" {
+		suggested := strings.TrimSpace(trig.SuggestedParentID)
+		if suggested == "" {
+			suggested = strings.TrimSpace(trig.ReplyID)
+		}
+		act.ParentID = suggested
 	}
 }
 
@@ -598,7 +614,7 @@ func fetchContext(ctx context.Context, c *api.Client, t api.Trigger) (*TriggerCo
 			}
 		}
 
-	case "feed_interesting":
+	case "feed_interesting", "needs_rating":
 		maxFetch := 3
 		if len(t.PostIDs) < maxFetch {
 			maxFetch = len(t.PostIDs)
@@ -618,6 +634,9 @@ func fetchContext(ctx context.Context, c *api.Client, t api.Trigger) (*TriggerCo
 func summarizeAction(a *Action) string {
 	switch a.Type {
 	case "reply":
+		if strings.TrimSpace(a.ParentID) != "" {
+			return fmt.Sprintf("reply to %s parent=%s: %q", a.PostID, a.ParentID, firstLine(a.Content, 80))
+		}
 		return fmt.Sprintf("reply to %s: %q", a.PostID, firstLine(a.Content, 80))
 	case "post":
 		return fmt.Sprintf("post in %s: %q", a.SubMoltID, firstLine(a.Title, 80))

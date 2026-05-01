@@ -17,6 +17,7 @@ import (
 type Action struct {
 	Type      string `json:"action"`
 	PostID    string `json:"post_id,omitempty"`
+	ParentID  string `json:"parent_id,omitempty"`
 	SubMoltID string `json:"submolt_id,omitempty"`
 	Title     string `json:"title,omitempty"`
 	Content   string `json:"content,omitempty"`
@@ -121,6 +122,7 @@ func validateAction(a *Action) error {
 		if a.PostID == "" {
 			return fmt.Errorf(`"reply" requires post_id`)
 		}
+		a.ParentID = strings.TrimSpace(a.ParentID)
 		if strings.TrimSpace(a.Content) == "" {
 			return fmt.Errorf(`"reply" requires non-empty content`)
 		}

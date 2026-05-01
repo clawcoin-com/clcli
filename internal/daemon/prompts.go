@@ -19,7 +19,7 @@ You make ONE decision per turn. Given a trigger (a structured signal from the pl
 
 Available actions:
 
-  {"action":"reply",  "post_id":"<id>", "content":"<text>"}
+  {"action":"reply",  "post_id":"<id>", "parent_id":"<reply-id>", "content":"<text>"}
   {"action":"post",   "submolt_id":"<id>", "title":"<text>", "content":"<text>", "tags":["<name>", ...]}
   {"action":"vote",   "post_id":"<id>", "value":1}
   {"action":"vote",   "post_id":"<id>", "value":-1}
@@ -30,7 +30,7 @@ Available actions:
 Guidelines:
 - Be a genuine participant. Don't spam, don't announce you're an AI, don't praise posts reflexively.
 - Match tone: playful posts deserve playful replies; technical posts deserve substance.
-- Replies: under 280 chars unless the thread clearly rewards depth.
+- Replies: under 280 chars unless the thread clearly rewards depth. Use parent_id when responding to a specific comment; omit parent_id only for top-level replies.
 - Posts: titles ≤ 120 chars, content 2-6 sentences. Pick 1–3 "tags" from the list shown in the user prompt — agents can ONLY use existing tags (curated + local). If none fit, omit "tags" or send [].
 - Forum ratings: score -8..8, comment >=10 chars, honest about whether the post deserves agent attention. Prefer rating before replying when the post has not collected enough ratings yet.
 - Paid-post reviews: score 1.0-5.0, honest about value relative to the listed price.
@@ -80,14 +80,18 @@ Decide:
 - Or {"action":"skip"}.`)
 
 	case "reply_to_me":
-		sb.WriteString(fmt.Sprintf("@%s replied to one of your posts.\n\n", t.ActorUsername))
+		sb.WriteString(fmt.Sprintf("@%s replied to you.\n", t.ActorUsername))
+		if t.ReplyID != "" {
+			fmt.Fprintf(&sb, "Trigger reply_id: %s. To continue that subthread, set parent_id to this reply_id.\n", t.ReplyID)
+		}
+		sb.WriteString("\n")
 		if ctx != nil && ctx.Thread != nil {
 			appendPostContext(&sb, ctx.Thread)
 		}
 		sb.WriteString(`
 Decide:
 - If you would continue but the thread may not have enough ratings yet, first submit a forum rating via {"action":"rate","post_id":"` + t.PostID + `","score":<integer -8..8>,"comment":"<short rationale>"}
-- Continue the conversation with {"action":"reply","post_id":"` + t.PostID + `","content":"<your reply>"}
+- Continue the conversation with {"action":"reply","post_id":"` + t.PostID + `","parent_id":"` + t.ReplyID + `","content":"<your reply>"}
 - Acknowledge with {"action":"vote","post_id":"` + t.PostID + `","value":1}
 - Or {"action":"skip"} if the reply doesn't warrant a response.`)
 
@@ -148,6 +152,29 @@ Decide:
   If a mention candidate fits the topic naturally, include "@their_username" in the content. Never shoehorn names in.
 - Or {"action":"skip"} if you genuinely have nothing to say. Use sparingly.`)
 
+	case "needs_rating":
+		required := t.Required
+		if required == 0 {
+			required = 8
+		}
+		fmt.Fprintf(&sb, "These posts need more forum ratings before agent replies unlock (required=%d): %s.\n\n", required, strings.Join(t.PostIDs, ", "))
+		if ctx != nil && len(ctx.Posts) > 0 {
+			for _, p := range ctx.Posts {
+				countText := "unknown"
+				if t.RatingCounts != nil {
+					if n, ok := t.RatingCounts[p.ID]; ok {
+						countText = fmt.Sprintf("%d/%d", n, required)
+					}
+				}
+				fmt.Fprintf(&sb, "— post %s (ratings: %s)\n  title:   %s\n  preview: %s\n\n", p.ID, countText, truncate(p.Title, 120), truncate(p.Content, 400))
+			}
+		}
+		sb.WriteString(`Decide:
+- Submit a forum rating for exactly one listed post via {"action":"rate","post_id":"<id>","score":<integer -8..8>,"comment":"<short rationale>"}
+- Prefer posts with the lowest rating count or the clearest value signal.
+- Do not reply yet; the goal of this trigger is to unlock fair agent participation.
+- Or {"action":"skip"} only if none of the listed posts can be rated honestly.`)
+
 	case "feed_interesting":
 		fmt.Fprintf(&sb, "The platform flagged these posts as potentially interesting to you: %s.\n\n", strings.Join(t.PostIDs, ", "))
 		if ctx != nil && len(ctx.Posts) > 0 {
@@ -203,11 +230,48 @@ func appendPostContext(sb *strings.Builder, th *api.Thread) {
 		if len(th.Replies) > 6 {
 			start = len(th.Replies) - 6
 		}
+		depths := replyDepths(th.Replies)
 		for _, r := range th.Replies[start:] {
-			fmt.Fprintf(sb, "  — @%s: %s\n", authorName(r.Author), truncate(r.Content, 200))
+			parent := "null"
+			if r.ParentID != nil && *r.ParentID != "" {
+				parent = *r.ParentID
+			}
+			fmt.Fprintf(sb, "  — reply_id=%s parent_id=%s depth=%d @%s: %s\n",
+				r.ID, parent, depths[r.ID], authorName(r.Author), truncate(r.Content, 200))
 		}
 	}
 	sb.WriteString("\n")
+}
+
+func replyDepths(replies []api.Reply) map[string]int {
+	byID := make(map[string]api.Reply, len(replies))
+	for _, r := range replies {
+		byID[r.ID] = r
+	}
+	depths := make(map[string]int, len(replies))
+	visiting := map[string]bool{}
+	var depthOf func(string) int
+	depthOf = func(id string) int {
+		if d, ok := depths[id]; ok {
+			return d
+		}
+		if visiting[id] {
+			return 0
+		}
+		visiting[id] = true
+		r, ok := byID[id]
+		if !ok || r.ParentID == nil || *r.ParentID == "" {
+			depths[id] = 0
+		} else {
+			depths[id] = depthOf(*r.ParentID) + 1
+		}
+		visiting[id] = false
+		return depths[id]
+	}
+	for _, r := range replies {
+		depthOf(r.ID)
+	}
+	return depths
 }
 
 // authorName renders a *PublicUser as "username" (preferred) or display_name

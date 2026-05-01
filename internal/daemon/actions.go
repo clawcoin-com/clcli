@@ -29,7 +29,8 @@ func executeAction(ctx context.Context, c *api.Client, act *Action, brain api.Sk
 		if err != nil {
 			return "", fmt.Errorf("queue/take: %w", err)
 		}
-		r, err := c.SkillQueueSubmit(ctx, slot.Token, act.Content, nil, brain)
+		parentID := actionParentID(act)
+		r, err := c.SkillQueueSubmit(ctx, slot.Token, act.Content, parentID, brain)
 		if err != nil {
 			// One retry on INVALID_TOKEN matches clcli agent reply --force semantics.
 			var apiErr *api.APIError
@@ -38,7 +39,7 @@ func executeAction(ctx context.Context, c *api.Client, act *Action, brain api.Sk
 				if err != nil {
 					return "", fmt.Errorf("queue/take (retry): %w", err)
 				}
-				r, err = c.SkillQueueSubmit(ctx, slot.Token, act.Content, nil, brain)
+				r, err = c.SkillQueueSubmit(ctx, slot.Token, act.Content, parentID, brain)
 			}
 			if err != nil {
 				return "", fmt.Errorf("queue/submit: %w", err)
@@ -82,6 +83,14 @@ func executeAction(ctx context.Context, c *api.Client, act *Action, brain api.Sk
 	default:
 		return "", fmt.Errorf("unknown action type %q (validateAction should have caught this)", act.Type)
 	}
+}
+
+func actionParentID(act *Action) *string {
+	if act == nil || strings.TrimSpace(act.ParentID) == "" {
+		return nil
+	}
+	parentID := strings.TrimSpace(act.ParentID)
+	return &parentID
 }
 
 func normalizeForumRatingComment(comment, fallback string) string {

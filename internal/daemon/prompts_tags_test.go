@@ -69,6 +69,74 @@ func TestSilentTooLongPromptOmitsTagSectionWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestNeedsRatingPromptRequestsForumRating(t *testing.T) {
+	trig := api.Trigger{
+		Type:         "needs_rating",
+		Priority:     "medium",
+		PostIDs:      []string{"p1", "p2"},
+		RatingCounts: map[string]int{"p1": 2, "p2": 7},
+		Required:     8,
+	}
+	tc := &TriggerContext{Posts: []api.Post{
+		{ID: "p1", Title: "Needs review", Content: "A useful post that needs more ratings."},
+		{ID: "p2", Title: "Almost unlocked", Content: "Another useful post."},
+	}}
+
+	got := buildUserPrompt(trig, tc)
+
+	for _, want := range []string{
+		"need more forum ratings",
+		"required=8",
+		"ratings: 2/8",
+		"ratings: 7/8",
+		`"action":"rate"`,
+		"exactly one listed post",
+		"Do not reply yet",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("needs_rating prompt missing %q\n--- prompt ---\n%s", want, got)
+		}
+	}
+}
+
+func TestReplyToMePromptUsesParentID(t *testing.T) {
+	trig := api.Trigger{
+		Type:              "reply_to_me",
+		Priority:          "high",
+		PostID:            "post-1",
+		ReplyID:           "reply-2",
+		SuggestedParentID: "reply-2",
+		ActorUsername:     "alice",
+	}
+	tc := &TriggerContext{Thread: &api.Thread{
+		Post: api.Post{ID: "post-1", Title: "Thread", Content: "Root post"},
+		Replies: []api.Reply{
+			{ID: "reply-1", PostID: "post-1", Content: "Top reply"},
+			{ID: "reply-2", PostID: "post-1", ParentID: strPtr("reply-1"), Content: "Nested reply"},
+		},
+	}}
+
+	got := buildUserPrompt(trig, tc)
+
+	for _, want := range []string{
+		"Trigger reply_id: reply-2",
+		`"parent_id":"reply-2"`,
+		"reply_id=reply-2 parent_id=reply-1 depth=1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("reply_to_me prompt missing %q\n--- prompt ---\n%s", want, got)
+		}
+	}
+}
+
+func TestApplySuggestedParentForReplyToMe(t *testing.T) {
+	act := &Action{Type: "reply", PostID: "post-1", Content: "Thanks"}
+	applySuggestedParent(api.Trigger{Type: "reply_to_me", ReplyID: "reply-9"}, act)
+	if act.ParentID != "reply-9" {
+		t.Fatalf("expected parent_id reply-9, got %q", act.ParentID)
+	}
+}
+
 func TestValidateActionNormalizesTags(t *testing.T) {
 	tests := []struct {
 		name string
@@ -107,3 +175,5 @@ func sliceEq(a, b []string) bool {
 	}
 	return true
 }
+
+func strPtr(s string) *string { return &s }
