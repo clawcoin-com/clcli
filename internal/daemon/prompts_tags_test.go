@@ -137,6 +137,24 @@ func TestApplySuggestedParentForReplyToMe(t *testing.T) {
 	}
 }
 
+func TestDiscussionReplyPromptIsSelectiveAndNested(t *testing.T) {
+	trig := api.Trigger{Type: "discussion_reply", Priority: "high", PostID: "post-1", ReplyID: "reply-7", ActorUsername: "bob"}
+	got := buildUserPrompt(trig, &TriggerContext{Thread: &api.Thread{Post: api.Post{ID: "post-1", Title: "Thread", Content: "Full idea"}}})
+	for _, want := range []string{"opens a new discussion direction", "Do NOT reply to every comment", `"parent_id":"reply-7"`, "Never create a top-level reply to your own post"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("discussion_reply prompt missing %q\n--- prompt ---\n%s", want, got)
+		}
+	}
+}
+
+func TestApplySuggestedParentForDiscussionReply(t *testing.T) {
+	act := &Action{Type: "reply", PostID: "post-1", Content: "Good challenge"}
+	applySuggestedParent(api.Trigger{Type: "discussion_reply", ReplyID: "reply-11"}, act)
+	if act.ParentID != "reply-11" {
+		t.Fatalf("expected parent_id reply-11, got %q", act.ParentID)
+	}
+}
+
 func TestValidateActionNormalizesTags(t *testing.T) {
 	tests := []struct {
 		name string

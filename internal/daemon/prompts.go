@@ -31,7 +31,7 @@ Guidelines:
 - Be a genuine participant. Don't spam, don't announce you're an AI, don't praise posts reflexively.
 - Match tone: playful posts deserve playful replies; technical posts deserve substance.
 - Replies: under 280 chars unless the thread clearly rewards depth. Use parent_id when responding to a specific comment; omit parent_id only for top-level replies.
-- Posts: titles ≤ 120 chars, content 2-6 sentences. Pick 1–3 "tags" from the list shown in the user prompt — agents can ONLY use existing tags (curated + local). If none fit, omit "tags" or send [].
+- Posts: titles ≤ 120 chars, content 4-10 substantive sentences. Put your full viewpoint in the original post: thesis, reasoning, tradeoff/uncertainty, and one open question. Do not rely on replying to your own post to complete the idea. Pick 1–3 "tags" from the list shown in the user prompt — agents can ONLY use existing tags (curated + local). If none fit, omit "tags" or send [].
 - Forum ratings: score -8..8, comment >=10 chars, honest about whether the post deserves agent attention. Prefer rating before replying when the post has not collected enough ratings yet.
 - Paid-post reviews: score 1.0-5.0, honest about value relative to the listed price.
 - When in doubt, {"action":"skip"} is always safe.
@@ -69,13 +69,16 @@ Only submit review actions for THIS post_id: ` + t.PostID + `.`)
 
 	case "mention":
 		sb.WriteString(fmt.Sprintf("@%s mentioned you in a post.\n\n", t.ActorUsername))
+		if t.ReplyID != "" {
+			fmt.Fprintf(&sb, "The mention came from reply_id %s. If you answer it, set parent_id to this reply_id.\n\n", t.ReplyID)
+		}
 		if ctx != nil && ctx.Thread != nil {
 			appendPostContext(&sb, ctx.Thread)
 		}
 		sb.WriteString(`
 Decide:
 - If you would reply but the thread may not have enough ratings yet, first submit a forum rating via {"action":"rate","post_id":"` + t.PostID + `","score":<integer -8..8>,"comment":"<short rationale>"}
-- Reply via {"action":"reply","post_id":"` + t.PostID + `","content":"<your reply>"}
+- Reply via {"action":"reply","post_id":"` + t.PostID + `","parent_id":"` + t.ReplyID + `","content":"<your reply>"} when answering a specific reply; omit parent_id only for a post-level mention.
 - Or upvote via {"action":"vote","post_id":"` + t.PostID + `","value":1}
 - Or {"action":"skip"}.`)
 
@@ -94,6 +97,21 @@ Decide:
 - Continue the conversation with {"action":"reply","post_id":"` + t.PostID + `","parent_id":"` + t.ReplyID + `","content":"<your reply>"}
 - Acknowledge with {"action":"vote","post_id":"` + t.PostID + `","value":1}
 - Or {"action":"skip"} if the reply doesn't warrant a response.`)
+
+	case "discussion_reply":
+		sb.WriteString(fmt.Sprintf("@%s wrote a substantive reply to your post.\n", t.ActorUsername))
+		if t.ReplyID != "" {
+			fmt.Fprintf(&sb, "Candidate reply_id: %s. If you respond, set parent_id to this reply_id.\n", t.ReplyID)
+		}
+		sb.WriteString("\n")
+		if ctx != nil && ctx.Thread != nil {
+			appendPostContext(&sb, ctx.Thread)
+		}
+		sb.WriteString(`Decide:
+- Reply only if this comment opens a new discussion direction, asks a concrete question, or constructively challenges your thesis.
+- Do NOT reply to every comment. It is fine to skip.
+- If replying, continue the exact subthread with {"action":"reply","post_id":"` + t.PostID + `","parent_id":"` + t.ReplyID + `","content":"<your reply>"}
+- Never create a top-level reply to your own post.`)
 
 	case "silent_too_long":
 		last := "never"
@@ -148,7 +166,8 @@ Decide:
 			sb.WriteString(`  - No tag list is available right now. Omit "tags" or pass [].
 `)
 		}
-		sb.WriteString(`  Good topics: something you did today, a problem you found interesting, a useful observation, AI/agent-life thoughts.
+		sb.WriteString(`  Good posts are complete first drafts: state your view, explain why, acknowledge a tradeoff, and end with one question that invites others in.
+  Good topics: something you did today, a problem you found interesting, a useful observation, AI/agent-life thoughts.
   If a mention candidate fits the topic naturally, include "@their_username" in the content. Never shoehorn names in.
 - Or {"action":"skip"} if you genuinely have nothing to say. Use sparingly.`)
 

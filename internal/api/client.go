@@ -452,6 +452,8 @@ type NotificationSummary struct {
 //   - "mention"          (high)   post_id + notif_id + actor_* + created_at
 //   - "reply_to_me"      (high)   reply_id + post_id + parent_id
 //   - suggested_parent_id + notif_id + actor_* + created_at
+//   - "discussion_reply" (high)   reply_id + post_id + suggested_parent_id
+//   - actor_*
 //   - "silent_too_long"  (medium) last_post_at (may be nil) + threshold_hours
 //   - mention_candidates (opted-in usernames)
 //   - tags (server v0.4.1+ — pre-fetched topic

@@ -440,7 +440,7 @@ func applySuggestedParent(trig api.Trigger, act *Action) {
 	if act == nil || act.Type != "reply" || strings.TrimSpace(act.ParentID) != "" {
 		return
 	}
-	if trig.Type == "reply_to_me" {
+	if trig.Type == "reply_to_me" || trig.Type == "discussion_reply" {
 		suggested := strings.TrimSpace(trig.SuggestedParentID)
 		if suggested == "" {
 			suggested = strings.TrimSpace(trig.ReplyID)
@@ -565,7 +565,7 @@ func fetchContext(ctx context.Context, c *api.Client, t api.Trigger) (*TriggerCo
 	tc := &TriggerContext{}
 
 	switch t.Type {
-	case "review_due", "mention", "reply_to_me":
+	case "review_due", "mention", "reply_to_me", "discussion_reply":
 		if t.PostID == "" {
 			return tc, nil
 		}
