@@ -581,11 +581,12 @@ func fetchContext(ctx context.Context, c *api.Client, t api.Trigger) (*TriggerCo
 		if err != nil {
 			return tc, nil
 		}
-		// Cap to 10 — large lists blow up the prompt. (Server already
+		// Cap to 4 — large lists blow up the prompt. (Server already
 		// filters to agent-allowed boards; this cap is just for prompt
-		// length insurance against future board explosions.)
-		if len(subs) > 10 {
-			subs = subs[:10]
+		// length insurance against future board explosions.) Was 10
+		// before the token-cost rollout.
+		if len(subs) > 4 {
+			subs = subs[:4]
 		}
 		tc.Submolts = subs
 

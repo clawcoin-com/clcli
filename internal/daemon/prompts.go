@@ -178,6 +178,11 @@ Decide:
 		}
 		fmt.Fprintf(&sb, "These posts need more forum ratings before agent replies unlock (required=%d): %s.\n\n", required, strings.Join(t.PostIDs, ", "))
 		if ctx != nil && len(ctx.Posts) > 0 {
+			// In multi-post needs_rating context, send the title + rating
+			// count only — body bloats input tokens for a 3-post bundle.
+			// If brains need full body to score honestly, single-post
+			// triggers (mention / reply_to_me) still ship body via
+			// appendPostContext.
 			for _, p := range ctx.Posts {
 				countText := "unknown"
 				if t.RatingCounts != nil {
@@ -185,8 +190,10 @@ Decide:
 						countText = fmt.Sprintf("%d/%d", n, required)
 					}
 				}
-				fmt.Fprintf(&sb, "— post %s (ratings: %s)\n  title:   %s\n  preview: %s\n\n", p.ID, countText, truncate(p.Title, 120), truncate(p.Content, 400))
+				fmt.Fprintf(&sb, "— post %s (ratings: %s) title: %s\n",
+					p.ID, countText, truncate(p.Title, 120))
 			}
+			sb.WriteString("\n")
 		}
 		sb.WriteString(`Decide:
 - Submit a forum rating for exactly one listed post via {"action":"rate","post_id":"<id>","score":<integer -8..8>,"comment":"<short rationale>"}
@@ -197,9 +204,13 @@ Decide:
 	case "feed_interesting":
 		fmt.Fprintf(&sb, "The platform flagged these posts as potentially interesting to you: %s.\n\n", strings.Join(t.PostIDs, ", "))
 		if ctx != nil && len(ctx.Posts) > 0 {
+			// Same compaction as needs_rating: title + short preview only,
+			// not full body. Brains use this trigger to skim and pick one.
 			for _, p := range ctx.Posts {
-				fmt.Fprintf(&sb, "— post %s\n  title:   %s\n  preview: %s\n\n", p.ID, truncate(p.Title, 120), truncate(p.Content, 400))
+				fmt.Fprintf(&sb, "— post %s title: %s\n  preview: %s\n",
+					p.ID, truncate(p.Title, 120), truncate(p.Content, 200))
 			}
+			sb.WriteString("\n")
 		}
 		sb.WriteString(`Decide:
 - Submit a forum rating for one via {"action":"rate","post_id":"<id>","score":<integer -8..8>,"comment":"<short rationale>"}; prefer this before replying so agent discussions unlock cleanly
@@ -228,7 +239,10 @@ func appendPostContext(sb *strings.Builder, th *api.Thread) {
 	}
 	fmt.Fprintf(sb, "Post by @%s in submolt %s:\n", authorName(th.Post.Author), th.Post.SubMoltID)
 	fmt.Fprintf(sb, "  title:   %s\n", th.Post.Title)
-	fmt.Fprintf(sb, "  content: %s\n", truncate(th.Post.Content, 600))
+	// content is shortened (was 600 → 300 runes) to cut input tokens. Body
+	// is still always sent — agents need to know what the post is actually
+	// about; only the long tail is dropped.
+	fmt.Fprintf(sb, "  content: %s\n", truncate(th.Post.Content, 300))
 
 	// Community quality signals.
 	replyCount := len(th.Replies)
@@ -245,9 +259,13 @@ func appendPostContext(sb *strings.Builder, th *api.Thread) {
 
 	if len(th.Replies) > 0 {
 		sb.WriteString("\nReplies (most recent last, oldest first):\n")
+		// Only the most recent replies are surfaced (was 6 → 3) and each is
+		// truncated more aggressively (was 200 → 120 runes). The brain only
+		// needs the tail of the conversation to decide whether to continue;
+		// older replies just inflate input tokens.
 		start := 0
-		if len(th.Replies) > 6 {
-			start = len(th.Replies) - 6
+		if len(th.Replies) > 3 {
+			start = len(th.Replies) - 3
 		}
 		depths := replyDepths(th.Replies)
 		for _, r := range th.Replies[start:] {
@@ -256,7 +274,7 @@ func appendPostContext(sb *strings.Builder, th *api.Thread) {
 				parent = *r.ParentID
 			}
 			fmt.Fprintf(sb, "  — reply_id=%s parent_id=%s depth=%d @%s: %s\n",
-				r.ID, parent, depths[r.ID], authorName(r.Author), truncate(r.Content, 200))
+				r.ID, parent, depths[r.ID], authorName(r.Author), truncate(r.Content, 120))
 		}
 	}
 	sb.WriteString("\n")
