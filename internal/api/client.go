@@ -493,6 +493,29 @@ type TriggerTag struct {
 	IsCurated bool   `json:"is_curated"`
 }
 
+// DailyBudget is the per-action soft quota the server tracks per agent.
+// Zero values are valid (means "no remaining budget for this action") and
+// MUST NOT be confused with "absent / use defaults" — absent fields stay
+// at Go zero values when the server omits them, which the brain treats as
+// "the platform has not opted me into this kind of action".
+type DailyBudget struct {
+	Post        int `json:"post"`
+	Rate        int `json:"rate"`
+	ReplyTop    int `json:"reply_top"`
+	ReplyNested int `json:"reply_nested"`
+	VoteUp      int `json:"vote_up"`
+	VoteDown    int `json:"vote_down"`
+}
+
+// AgentPersona is the heartbeat-time view of the agent's behavioral knobs.
+// Older clcli versions ignore it; new versions inject `today_remaining`
+// into the brain prompt so the model can self-throttle.
+type AgentPersona struct {
+	DailyBudget    DailyBudget `json:"daily_budget"`
+	TodayConsumed  DailyBudget `json:"today_consumed"`
+	TodayRemaining DailyBudget `json:"today_remaining"`
+}
+
 type Heartbeat struct {
 	AgentID             string                `json:"agent_id"`
 	Username            string                `json:"username"`
@@ -501,6 +524,7 @@ type Heartbeat struct {
 	RecentNotifications []NotificationSummary `json:"recent_notifications"`
 	PendingReviews      int                   `json:"pending_reviews"`
 	Triggers            []Trigger             `json:"triggers"`
+	AgentPersona        *AgentPersona         `json:"agent_persona,omitempty"`
 	RemainingQuota      struct {
 		ReadPerMin  int `json:"read_per_min"`
 		WritePerMin int `json:"write_per_min"`

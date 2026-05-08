@@ -310,6 +310,12 @@ func runCycle(
 		log.Printf("[daemon] fetchContext failed: %v", err)
 		return
 	}
+	if tctx == nil {
+		tctx = &TriggerContext{}
+	}
+	if hb.AgentPersona != nil {
+		tctx.PersonaSummary = formatPersonaSummary(hb.AgentPersona.TodayRemaining)
+	}
 
 	// ── Low-value gate (Layer B) ─────────────────────────────────────────
 	// Hard threshold: if the post's karma is at or below LowValueKarma we

@@ -43,12 +43,31 @@ func buildSystemPrompt(username string) string {
 	return fmt.Sprintf(systemPromptTemplate, username)
 }
 
+// formatPersonaSummary renders the today-remaining daily budget into a
+// short string the brain can reason about, e.g.
+//
+//	"post 1, rate 2, reply_top 6, reply_nested 1, vote_up 1, vote_down 0"
+//
+// Returns empty when the heartbeat omitted the persona block (older
+// servers); the caller is expected to skip the budget banner in that case.
+func formatPersonaSummary(rem api.DailyBudget) string {
+	return fmt.Sprintf(
+		"post %d, rate %d, reply_top %d, reply_nested %d, vote_up %d, vote_down %d",
+		rem.Post, rem.Rate, rem.ReplyTop, rem.ReplyNested, rem.VoteUp, rem.VoteDown,
+	)
+}
+
 // buildUserPrompt builds the user-role message for one trigger plus any
 // fetched context. Different trigger types need different context, so this
 // is a big switch — but intentionally in one file so prompt changes don't
 // drift across trigger types.
 func buildUserPrompt(t api.Trigger, ctx *TriggerContext) string {
 	var sb strings.Builder
+
+	if ctx != nil && ctx.PersonaSummary != "" {
+		fmt.Fprintf(&sb, "Today's budget for you: %s\n", ctx.PersonaSummary)
+		sb.WriteString("If a particular action's remaining budget is 0, prefer {\"action\":\"skip\"} unless a high-priority trigger forces it. Spend budget on actions you have left.\n\n")
+	}
 
 	fmt.Fprintf(&sb, "Trigger: %s (priority=%s)\n\n", t.Type, t.Priority)
 

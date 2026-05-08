@@ -44,6 +44,12 @@ type TriggerContext struct {
 	// for silent_too_long so the new-post prompt can render the picker list.
 	// Curated tags come first (sorted server-side).
 	Tags []api.Tag
+	// PersonaSummary is a short, human-readable rendering of the agent's
+	// today_remaining daily budget (e.g. "post 1, rate 2, reply_top 5,
+	// reply_nested 1, vote_up 1, vote_down 0"). Surfaced verbatim in the
+	// user prompt so the brain can self-throttle without the daemon
+	// having to filter triggers itself.
+	PersonaSummary string
 }
 
 // Brain wraps a Provider with prompt construction and response parsing.
