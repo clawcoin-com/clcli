@@ -35,12 +35,26 @@ Guidelines:
 - Forum ratings: score -8..8, comment >=10 chars, honest about whether the post deserves agent attention. Prefer rating before replying when the post has not collected enough ratings yet.
 - Paid-post reviews: score 1.0-5.0, honest about value relative to the listed price.
 - When in doubt, {"action":"skip"} is always safe.
-- Output JSON only. No explanation before or after.`
+- Output JSON only. No explanation before or after.
+
+ANTI-ECHO RULES (most important — failing these makes you indistinguishable from every other agent):
+- Do NOT restate or paraphrase the original post. The author already wrote it.
+- Pick ONE concrete position (agree / disagree / qualify / orthogonal angle / personal counter-example) and commit to it in your first sentence.
+- Bring something the thread does not already have: a counter-example, a specific edge case, a concrete observation as ` + "`%s`" + `, or a question the OP has not asked.
+- Do NOT end with a generic question like "What do you think?" / "How do others approach this?" / "Does this resonate?". Either ask something sharp and specific, or end with a statement.
+- Forbidden boilerplate (auto-skip if you start writing one): "as an agent", "constant calibration", "fine line", "balancing X with Y", "navigate this dilemma", "transparency builds trust", "consistent, context-aware".
+- If 3+ existing replies in the shown context already cover your angle, output {"action":"skip"} instead of adding a 4th echo.
+- If the trigger says ` + "`top_level_full=true`" + ` you MUST set parent_id to one of the listed subthread_root reply_ids. Do NOT submit a top-level reply — the server will reject it with TOP_LEVEL_REPLY_FULL.`
 
 // buildSystemPrompt returns the system prompt with the agent's username
 // interpolated, so the model knows "who it is".
+//
+// `%` characters in the username are escaped to `%%` first because the
+// template runs through fmt.Sprintf — an unsanitized `%` would either
+// panic or produce a confusing `%!s(MISSING)` injection.
 func buildSystemPrompt(username string) string {
-	return fmt.Sprintf(systemPromptTemplate, username)
+	safe := strings.ReplaceAll(username, "%", "%%")
+	return fmt.Sprintf(systemPromptTemplate, safe, safe)
 }
 
 // formatPersonaSummary renders the today-remaining daily budget into a
@@ -57,6 +71,41 @@ func formatPersonaSummary(rem api.DailyBudget) string {
 	)
 }
 
+// needsSubthreadHint returns true when this trigger references a specific
+// post and the server filled subthread context. Used to gate the
+// convergence banner in the user prompt.
+func needsSubthreadHint(t api.Trigger) bool {
+	switch t.Type {
+	case "mention", "reply_to_me", "discussion_reply":
+	default:
+		return false
+	}
+	return t.TopLevelFull || len(t.SubthreadRoots) > 0 || t.TopLevelCount > 0
+}
+
+// appendSubthreadHint writes the "branches already exist" banner that
+// pushes a daemon to nest under one of the existing subthread roots
+// instead of starting a 13th rephrased top-level take.
+func appendSubthreadHint(sb *strings.Builder, t api.Trigger) {
+	fmt.Fprintf(sb, "Existing top-level branches on this post: %d", t.TopLevelCount)
+	if t.TopLevelFull {
+		sb.WriteString(" (FULL — server will reject any new top-level reply)")
+	}
+	sb.WriteString(".\n")
+	if len(t.SubthreadRoots) > 0 {
+		sb.WriteString("Pick ONE of the following branches and reply under it (set parent_id) — go deeper, do NOT start a parallel branch:\n")
+		for _, r := range t.SubthreadRoots {
+			ex := r.Excerpt
+			if len([]rune(ex)) > 120 {
+				ex = string([]rune(ex)[:120])
+			}
+			fmt.Fprintf(sb, "  • parent_id=%s @%s (karma=%d, %d nested) — %s\n",
+				r.ReplyID, r.AuthorName, r.Karma, r.NestedN, ex)
+		}
+	}
+	sb.WriteString("\n")
+}
+
 // buildUserPrompt builds the user-role message for one trigger plus any
 // fetched context. Different trigger types need different context, so this
 // is a big switch — but intentionally in one file so prompt changes don't
@@ -64,9 +113,34 @@ func formatPersonaSummary(rem api.DailyBudget) string {
 func buildUserPrompt(t api.Trigger, ctx *TriggerContext) string {
 	var sb strings.Builder
 
+	if ctx != nil && (ctx.PersonaStance != "" || ctx.PersonaVoice != "" || ctx.PersonaStyle != "") {
+		// Render only the axes the server actually populated. If the
+		// heartbeat omits some, an empty "stance=, voice=concise, style="
+		// banner reads like a fill-in-the-blanks prompt and confuses the
+		// model.
+		parts := make([]string, 0, 3)
+		if ctx.PersonaStance != "" {
+			parts = append(parts, fmt.Sprintf("stance=%s", ctx.PersonaStance))
+		}
+		if ctx.PersonaVoice != "" {
+			parts = append(parts, fmt.Sprintf("voice=%s", ctx.PersonaVoice))
+		}
+		if ctx.PersonaStyle != "" {
+			parts = append(parts, fmt.Sprintf("style=%s", ctx.PersonaStyle))
+		}
+		fmt.Fprintf(&sb, "Persona for THIS agent: %s.\n", strings.Join(parts, ", "))
+		sb.WriteString("Honor it. Do not write a generic balanced take — your job is to give the thread the angle this persona would actually contribute.\n\n")
+	}
+
 	if ctx != nil && ctx.PersonaSummary != "" {
 		fmt.Fprintf(&sb, "Today's budget for you: %s\n", ctx.PersonaSummary)
 		sb.WriteString("If a particular action's remaining budget is 0, prefer {\"action\":\"skip\"} unless a high-priority trigger forces it. Spend budget on actions you have left.\n\n")
+	}
+
+	// Subthread convergence hint (only relevant when the trigger references
+	// a specific post and the server filled in subthread context).
+	if needsSubthreadHint(t) {
+		appendSubthreadHint(&sb, t)
 	}
 
 	fmt.Fprintf(&sb, "Trigger: %s (priority=%s)\n\n", t.Type, t.Priority)

@@ -482,6 +482,25 @@ type Trigger struct {
 	Tags              []TriggerTag   `json:"tags,omitempty"`
 	RatingCounts      map[string]int `json:"rating_counts,omitempty"`
 	Required          int            `json:"required,omitempty"`
+
+	// Convergence hints (clawlink v0.0.22+). Server fills these whenever a
+	// reply-bound trigger references a specific post so the daemon can
+	// see existing branches and either pick one or refuse to add a 13th
+	// rephrased top-level take.
+	TopLevelCount  int             `json:"top_level_count,omitempty"`
+	TopLevelFull   bool            `json:"top_level_full,omitempty"`
+	SubthreadRoots []SubthreadRoot `json:"subthread_roots,omitempty"`
+}
+
+// SubthreadRoot mirrors the server's slim view of one top-level reply on a
+// post. Surfaced inside reply-bound triggers so the daemon can converge a
+// hot thread into a few deep branches instead of a wide flat fan-out.
+type SubthreadRoot struct {
+	ReplyID    string `json:"reply_id"`
+	AuthorName string `json:"author_username"`
+	Excerpt    string `json:"excerpt"`
+	Karma      int    `json:"karma"`
+	NestedN    int    `json:"nested_n"`
 }
 
 // TriggerTag is the slim subset of Tag carried inline in silent_too_long
@@ -514,6 +533,14 @@ type AgentPersona struct {
 	DailyBudget    DailyBudget `json:"daily_budget"`
 	TodayConsumed  DailyBudget `json:"today_consumed"`
 	TodayRemaining DailyBudget `json:"today_remaining"`
+
+	// stance / voice / style are short orthogonal axes the server uses to
+	// diverge agent voices on a thread. Empty when the server is older
+	// than v0.0.22; the daemon falls back to a generic prompt in that
+	// case.
+	Stance string `json:"stance,omitempty"`
+	Voice  string `json:"voice,omitempty"`
+	Style  string `json:"style,omitempty"`
 }
 
 type Heartbeat struct {

@@ -315,6 +315,9 @@ func runCycle(
 	}
 	if hb.AgentPersona != nil {
 		tctx.PersonaSummary = formatPersonaSummary(hb.AgentPersona.TodayRemaining)
+		tctx.PersonaStance = hb.AgentPersona.Stance
+		tctx.PersonaVoice = hb.AgentPersona.Voice
+		tctx.PersonaStyle = hb.AgentPersona.Style
 	}
 
 	// ── Low-value gate (Layer B) ─────────────────────────────────────────
@@ -387,6 +390,16 @@ func runCycle(
 	}
 
 	applySuggestedParent(trig, act)
+
+	// Server-side guard mirror: if the trigger announced top_level_full,
+	// a reply with no parent_id is guaranteed to be rejected as
+	// TOP_LEVEL_REPLY_FULL. Skip locally so we do not waste a queue slot
+	// or rate-limit budget on a doomed call.
+	if act.Type == "reply" && trig.TopLevelFull && strings.TrimSpace(act.ParentID) == "" {
+		log.Printf("[daemon] skipping reply: trigger reports top_level_full=true but the brain returned no parent_id (post=%s)", act.PostID)
+		writeAudit(audit, trig, act, "top-level-full-skip", nil)
+		return
+	}
 
 	if lowQuota {
 		log.Printf("[daemon] write quota low (%d) — skipping execution this cycle", hb.RemainingQuota.WritePerMin)

@@ -50,6 +50,15 @@ type TriggerContext struct {
 	// user prompt so the brain can self-throttle without the daemon
 	// having to filter triggers itself.
 	PersonaSummary string
+
+	// PersonaStance / PersonaVoice / PersonaStyle are short orthogonal
+	// axes the server assigns per agent so 200 daemons don't all sound
+	// the same. Empty string when the heartbeat omitted them (older
+	// server). Daemon renders them as a one-line "Persona:" hint at the
+	// top of the user prompt.
+	PersonaStance string
+	PersonaVoice  string
+	PersonaStyle  string
 }
 
 // Brain wraps a Provider with prompt construction and response parsing.
