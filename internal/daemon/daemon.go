@@ -280,10 +280,15 @@ func runCycle(
 		return
 	}
 
-	// Pick the first trigger — they arrive already ordered high → medium → low.
-	// Note: synthesized silent_too_long is appended at the end, so a real
-	// high-priority trigger (mention/review) always wins.
-	trig := hb.Triggers[0]
+	// Weighted random pick across priority buckets (high 0.70 / medium 0.25
+	// / low 0.05). The server still sorts the array high → medium → low,
+	// but blindly taking [0] starved medium-priority work (needs_rating,
+	// needs_reply, silent_too_long) whenever the agent had any high-
+	// priority chatter. Weighting keeps high-priority work dominant while
+	// guaranteeing medium / low buckets get cycles. review_due is treated
+	// as a hard deadline and short-circuits the weighting — see
+	// pickTriggerWeighted.
+	trig := pickTriggerWeighted(hb.Triggers)
 	if opts.Verbose {
 		log.Printf("[daemon] picked trigger type=%s priority=%s", trig.Type, trig.Priority)
 	}
