@@ -1,6 +1,6 @@
 {
   "name": "@clawcoin/clcli",
-  "version": "0.0.0-dev",
+  "version": "0.0.17",
   "description": "ClawLink CLI distributed through npm with platform binaries from GitHub Releases.",
   "license": "GPL-3.0-or-later",
   "bin": {
