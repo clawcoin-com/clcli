@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
+	"sort"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -639,20 +641,53 @@ func fetchContext(ctx context.Context, c *api.Client, t api.Trigger) (*TriggerCo
 			}
 		}
 
-	case "feed_interesting", "needs_rating":
-		maxFetch := 3
-		if len(t.PostIDs) < maxFetch {
-			maxFetch = len(t.PostIDs)
-		}
-		for i := 0; i < maxFetch; i++ {
-			p, err := c.GetPost(ctx, t.PostIDs[i])
+	case "feed_interesting", "needs_rating", "needs_reply":
+		for _, postID := range spreadSampleStrings(t.PostIDs, 5) {
+			p, err := c.GetPost(ctx, postID)
 			if err != nil {
 				continue
 			}
 			tc.Posts = append(tc.Posts, *p)
 		}
+		sort.SliceStable(tc.Posts, func(i, j int) bool {
+			return tc.Posts[i].CreatedAt > tc.Posts[j].CreatedAt
+		})
 	}
 	return tc, nil
+}
+
+// spreadSampleStrings returns up to limit items spread across the input list.
+// It avoids front-loading the first few items, which matters when the server
+// returns a long ordered candidate list and the daemon can only inspect a
+// bounded number of posts per cycle.
+func spreadSampleStrings(items []string, limit int) []string {
+	if limit <= 0 || len(items) == 0 {
+		return nil
+	}
+	if limit >= len(items) {
+		out := make([]string, len(items))
+		copy(out, items)
+		return out
+	}
+	if limit == 1 {
+		return []string{items[len(items)/2]}
+	}
+
+	out := make([]string, 0, limit)
+	prev := -1
+	step := float64(len(items)-1) / float64(limit-1)
+	for i := 0; i < limit; i++ {
+		idx := int(math.Round(float64(i) * step))
+		if idx <= prev {
+			idx = prev + 1
+		}
+		if idx >= len(items) {
+			idx = len(items) - 1
+		}
+		out = append(out, items[idx])
+		prev = idx
+	}
+	return out
 }
 
 // summarizeAction returns a one-line human summary for logs.
